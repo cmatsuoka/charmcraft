@@ -23,8 +23,9 @@ import pathlib
 import shutil
 import subprocess
 import zipfile
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
+from craft_parts import plugins, LifecycleManager, Step, StepInfo
 from craft_providers import Executor
 
 from charmcraft.bases import check_if_base_matches_host
@@ -139,6 +140,63 @@ def relativise(src, dst):
     return pathlib.Path(os.path.relpath(str(dst), str(src.parent)))
 
 
+class CharmPluginProperties(plugins.PluginProperties):
+    """Parameters used in charm building."""
+
+    charm_requirements: List[str] = []
+    charm_constraints: List[str] = []
+    charm_packages: List[str] = ["pip", "setuptools", "wheel"]
+
+    @classmethod
+    def unmarshal(cls, data: Dict[str, Any]):
+        plugin_data = plugins.extract_plugin_properties(
+            data, plugin_name="charm", , required=["source"]
+        )
+        return cls(**plugin_data)
+
+
+class CharmPlugin(plugins.Plugin):
+    """Build the charm."""
+
+    properties_class = CharmPluginProperties
+
+    @classmethod
+    def get_build_snaps(self):
+        """Return a set of required snaps to install in the build environment."""
+        return set()
+
+    def get_build_packages(self):
+        """Return a set of required packages to install in the build environment."""
+        return return {"findutils", "python3-dev", "python3-venv"}
+
+    def get_build_environment(self):
+        """Return a dictionary with the environment to use in the build step."""
+        return {
+            # Add PATH to the python interpreter we always intend to use with
+            # this plugin. It can be user overridden, but that is an explicit
+            # choice made by a user.
+            "PATH": "{}/bin:${{PATH}}".format(self._part_info.part_install_dir),
+            "CHARMCRAFT_PYTHON_INTERPRETER": "python3",
+            "CHARMCRAFT_PYTHON_VENV_ARGS": "",
+        }
+
+    def get_build_commands(self):
+        """Return a list of commands to run during the build step."""
+        config = self._part_info.config
+        install_dir = self._part_info.part_install_dir
+
+        commands = [
+            'cp --archive --link --no-dereference . "{}"'.format(install_dir),
+        ]
+        return commands
+
+
+# def _build_callback(step_info: StepInfo) -> bool:
+#     if step_info.part_name != "charm":
+#         return True
+#
+#     return True
+
 class Builder:
     """The package builder."""
 
@@ -148,9 +206,13 @@ class Builder:
         self.requirement_paths = args["requirement"]
 
         self.buildpath = self.charmdir / BUILD_DIRNAME
-        self.ignore_rules = self._load_juju_ignore()
+        #self.ignore_rules = self._load_juju_ignore()
         self.config = config
         self.metadata = parse_metadata_yaml(self.charmdir)
+
+        self._parts = self.config.parts.copy()
+        self._charm_part = self._parts.setdefault("charm", {})
+        self._prime = self._charm_part.setdefault("prime", [])
 
     def build_charm(self, bases_config: BasesConfiguration) -> str:
         """Build the charm.
@@ -165,12 +227,36 @@ class Builder:
             shutil.rmtree(str(self.buildpath))
         self.buildpath.mkdir()
 
+        # register the charm plugin
+        plugins.register({"charm": CharmPlugin})
+
+        # update parts definition
+
         create_manifest(self.buildpath, self.config.project.started_at, bases_config)
 
         linked_entrypoint = self.handle_generic_paths()
         self.handle_dispatcher(linked_entrypoint)
-        self.handle_dependencies()
-        zipname = self.handle_package(bases_config)
+
+        # handle dependencies
+        if self.requirement_paths:
+            self._charm_part["charm-requirements"] = self.requirement_paths
+
+        # set the source for building to the indicated project dir
+        self._charm_part["source"] = str(self.buildpath)
+
+        lcm = LifecycleManager(
+            parts,
+            application_name="charmcraft",
+            cache_dir=pathlib.Path(),  # FIXME
+            entrypoint=self.entrypoint,
+            config=self.config
+        )
+
+        actions = lcm.plan()
+        with lcm.action_executor as aex:
+            aex.execute_action(actions)
+
+        zipname = self.handle_package(lcm.project_info.prime_dir, bases_config)
 
         logger.info("Created '%s'.", zipname)
         return zipname
@@ -416,40 +502,17 @@ class Builder:
         logger.debug("Installing dependencies")
 
         # virtualenv with other dependencies (if any)
-        if self.requirement_paths:
-            retcode = polite_exec(["pip3", "list"])
-            if retcode:
-                raise CommandError("problems using pip")
 
-            venvpath = self.buildpath / VENV_DIRNAME
-            cmd = [
-                "pip3",
-                "install",  # base command
-                "--target={}".format(
-                    venvpath
-                ),  # put all the resulting files in that specific dir
-            ]
-            if _pip_needs_system():
-                logger.debug("adding --system to work around pip3 defaulting to --user")
-                cmd.append("--system")
-            for reqspath in self.requirement_paths:
-                cmd.append(
-                    "--requirement={}".format(reqspath)
-                )  # the dependencies file(s)
-            retcode = polite_exec(cmd)
-            if retcode:
-                raise CommandError("problems installing dependencies")
-
-    def handle_package(self, bases_config: Optional[BasesConfiguration] = None):
+    def handle_package(self, prime_dir: Path, bases_config: Optional[BasesConfiguration] = None):
         """Handle the final package creation."""
         logger.debug("Creating the package itself")
         zipname = format_charm_file_name(self.metadata.name, bases_config)
         zipfh = zipfile.ZipFile(zipname, "w", zipfile.ZIP_DEFLATED)
-        for dirpath, dirnames, filenames in os.walk(self.buildpath, followlinks=True):
+        for dirpath, dirnames, filenames in os.walk(prime_dir, followlinks=True):
             dirpath = pathlib.Path(dirpath)
             for filename in filenames:
                 filepath = dirpath / filename
-                zipfh.write(str(filepath), str(filepath.relative_to(self.buildpath)))
+                zipfh.write(str(filepath), str(filepath.relative_to(prime_dir)))
 
         zipfh.close()
         return zipname
