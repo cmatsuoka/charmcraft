@@ -23,7 +23,10 @@ import pathlib
 import shutil
 import subprocess
 import zipfile
-from typing import Any, Dict, List, Optional
+from textwrap import dedent
+from typing import Any, Dict, List, Optional, cast
+
+from xdg import BaseDirectory  # type: ignore
 
 from craft_parts import plugins, LifecycleManager, Step
 from craft_providers import Executor
@@ -68,6 +71,21 @@ JUJU_DISPATCH_PATH="${{JUJU_DISPATCH_PATH:-$0}}" PYTHONPATH=lib:venv ./{entrypoi
 # The minimum set of hooks to be provided for compatibility with old Juju
 MANDATORY_HOOK_NAMES = {"install", "start", "upgrade-charm"}
 HOOKS_DIR = "hooks"
+
+CHARM_FILES = [
+    "metadata.yaml",
+    DISPATCH_FILENAME,
+    HOOKS_DIR,
+]
+
+CHARM_OPTIONAL = [
+    "config.yaml",
+    "metrics.yaml",
+    "actions.yaml",
+    "lxd-profile.yaml",
+    "templates",
+    "version",
+]
 
 
 def _format_run_on_base(base: Base) -> str:
@@ -145,7 +163,6 @@ class CharmPluginProperties(plugins.PluginProperties, plugins.PluginModel):
 
     source: str = ""
     charm_requirements: List[str] = []
-    charm_constraints: List[str] = []
     charm_packages: List[str] = ["pip", "setuptools", "wheel"]
 
     @classmethod
@@ -183,12 +200,28 @@ class CharmPlugin(plugins.Plugin):
 
     def get_build_commands(self):
         """Return a list of commands to run during the build step."""
-        # config = self._part_info.config
+        commands = [
+            '"${{CHARMCRAFT_PYTHON_INTERPRETER}}" -m venv ${{CHARMCRAFT_PYTHON_VENV_ARGS}} "{}"'.format(
+                self._part_info.part_install_dir
+            ),
+            'CHARMCRAFT_PYTHON_VENV_INTERP_PATH="{}/bin/${{CHARMCRAFT_PYTHON_INTERPRETER}}"'.format(
+                self._part_info.part_install_dir
+            ),
+        ]
+
+        options = cast(CharmPluginProperties, self._options)
+
+        if options.charm_requirements:
+            requirements = " ".join(f"-r {r!r}" for r in options.charm_requirements)
+            requirements_cmd = f"pip install -U {requirements}"
+            commands.append(requirements_cmd)
+
         install_dir = self._part_info.part_install_dir
 
         commands = [
             'cp --archive --link --no-dereference . "{}"'.format(install_dir),
         ]
+
         return commands
 
 
@@ -197,6 +230,7 @@ class CharmPlugin(plugins.Plugin):
 #         return True
 #
 #     return True
+
 
 class Builder:
     """The package builder."""
@@ -215,7 +249,7 @@ class Builder:
         print("===", self._parts)
 
         self._charm_part = self._parts.setdefault("charm", {})
-        # self._prime = self._charm_part.setdefault("prime", [])
+        self._prime = self._charm_part.setdefault("prime", [])
 
     def build_charm(self, bases_config: BasesConfiguration) -> str:
         """Build the charm.
@@ -243,15 +277,32 @@ class Builder:
         # handle dependencies
         if self.requirement_paths:
             self._charm_part["charm-requirements"] = [str(p) for p in self.requirement_paths]
-            print("=== charm part:", self._charm_part)
+
+        # create prime filter
+        self._prime.extend(CHARM_FILES)
+        for fn in CHARM_OPTIONAL:
+            path = self.buildpath / fn
+            if path.exists():
+                self._prime.append(fn)
+
+        entrypoint = linked_entrypoint.relative_to(self.buildpath)
+        if str(entrypoint) == entrypoint.name:
+            self._prime.append(str(entrypoing))
+        else:
+            self._prime.append(str(entrypoint.parents[0]))
+
+        print("=== charm part:", self._charm_part)
 
         # set the source for building to the indicated project dir
         self._charm_part["source"] = str(self.buildpath)
 
+        # set the cache dir for parts package management
+        cache_dir = BaseDirectory.save_cache_path("charmcraft")
+
         lcm = LifecycleManager(
             {"parts": self._parts},
             application_name="charmcraft",
-            cache_dir=pathlib.Path(),  # FIXME
+            cache_dir=cache_dir,
             entrypoint=self.entrypoint,
             config=self.config
         )
@@ -259,6 +310,8 @@ class Builder:
         actions = lcm.plan(Step.PRIME)
         with lcm.action_executor() as aex:
             aex.execute(actions)
+
+        stage_dir = lcm.project_info.stage_dir
 
         zipname = self.handle_package(lcm.project_info.prime_dir, bases_config)
 
@@ -417,7 +470,6 @@ class Builder:
                 abs_path = abs_basedir / name
 
                 if self.ignore_rules.match(str(rel_path), is_dir=True):
-                    print("=== Ignoring directory because of rules:", str(rel_path))
                     logger.debug(
                         "Ignoring directory because of rules: %r", str(rel_path)
                     )
