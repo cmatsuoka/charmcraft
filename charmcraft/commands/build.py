@@ -23,9 +23,9 @@ import pathlib
 import shutil
 import subprocess
 import zipfile
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from craft_parts import plugins, LifecycleManager, Step, StepInfo
+from craft_parts import plugins, LifecycleManager, Step
 from craft_providers import Executor
 
 from charmcraft.bases import check_if_base_matches_host
@@ -140,9 +140,10 @@ def relativise(src, dst):
     return pathlib.Path(os.path.relpath(str(dst), str(src.parent)))
 
 
-class CharmPluginProperties(plugins.PluginProperties):
+class CharmPluginProperties(plugins.PluginProperties, plugins.PluginModel):
     """Parameters used in charm building."""
 
+    source: str = ""
     charm_requirements: List[str] = []
     charm_constraints: List[str] = []
     charm_packages: List[str] = ["pip", "setuptools", "wheel"]
@@ -150,7 +151,7 @@ class CharmPluginProperties(plugins.PluginProperties):
     @classmethod
     def unmarshal(cls, data: Dict[str, Any]):
         plugin_data = plugins.extract_plugin_properties(
-            data, plugin_name="charm", , required=["source"]
+            data, plugin_name="charm", required=["source"]
         )
         return cls(**plugin_data)
 
@@ -167,7 +168,7 @@ class CharmPlugin(plugins.Plugin):
 
     def get_build_packages(self):
         """Return a set of required packages to install in the build environment."""
-        return return {"findutils", "python3-dev", "python3-venv"}
+        return {"findutils", "python3-dev", "python3-venv"}
 
     def get_build_environment(self):
         """Return a dictionary with the environment to use in the build step."""
@@ -182,7 +183,7 @@ class CharmPlugin(plugins.Plugin):
 
     def get_build_commands(self):
         """Return a list of commands to run during the build step."""
-        config = self._part_info.config
+        # config = self._part_info.config
         install_dir = self._part_info.part_install_dir
 
         commands = [
@@ -206,13 +207,15 @@ class Builder:
         self.requirement_paths = args["requirement"]
 
         self.buildpath = self.charmdir / BUILD_DIRNAME
-        #self.ignore_rules = self._load_juju_ignore()
+        self.ignore_rules = self._load_juju_ignore()
         self.config = config
         self.metadata = parse_metadata_yaml(self.charmdir)
 
         self._parts = self.config.parts.copy()
+        print("===", self._parts)
+
         self._charm_part = self._parts.setdefault("charm", {})
-        self._prime = self._charm_part.setdefault("prime", [])
+        # self._prime = self._charm_part.setdefault("prime", [])
 
     def build_charm(self, bases_config: BasesConfiguration) -> str:
         """Build the charm.
@@ -239,22 +242,23 @@ class Builder:
 
         # handle dependencies
         if self.requirement_paths:
-            self._charm_part["charm-requirements"] = self.requirement_paths
+            self._charm_part["charm-requirements"] = [str(p) for p in self.requirement_paths]
+            print("=== charm part:", self._charm_part)
 
         # set the source for building to the indicated project dir
         self._charm_part["source"] = str(self.buildpath)
 
         lcm = LifecycleManager(
-            parts,
+            {"parts": self._parts},
             application_name="charmcraft",
             cache_dir=pathlib.Path(),  # FIXME
             entrypoint=self.entrypoint,
             config=self.config
         )
 
-        actions = lcm.plan()
-        with lcm.action_executor as aex:
-            aex.execute_action(actions)
+        actions = lcm.plan(Step.PRIME)
+        with lcm.action_executor() as aex:
+            aex.execute(actions)
 
         zipname = self.handle_package(lcm.project_info.prime_dir, bases_config)
 
@@ -303,7 +307,7 @@ class Builder:
                         bases_index,
                         build_on_index,
                     )
-                    if is_managed_mode:
+                    if True or is_managed_mode:
                         charm_name = self.build_charm(bases_config)
                     else:
                         with launched_environment(
@@ -413,6 +417,7 @@ class Builder:
                 abs_path = abs_basedir / name
 
                 if self.ignore_rules.match(str(rel_path), is_dir=True):
+                    print("=== Ignoring directory because of rules:", str(rel_path))
                     logger.debug(
                         "Ignoring directory because of rules: %r", str(rel_path)
                     )
@@ -503,7 +508,11 @@ class Builder:
 
         # virtualenv with other dependencies (if any)
 
-    def handle_package(self, prime_dir: Path, bases_config: Optional[BasesConfiguration] = None):
+    def handle_package(
+        self,
+        prime_dir: pathlib.Path,
+        bases_config: Optional[BasesConfiguration] = None
+    ):
         """Handle the final package creation."""
         logger.debug("Creating the package itself")
         zipname = format_charm_file_name(self.metadata.name, bases_config)

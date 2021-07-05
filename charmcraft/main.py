@@ -356,24 +356,24 @@ def main(argv=None):
         argv = sys.argv
 
     # process
-    try:
-        env.ensure_charmcraft_environment_is_supported()
-        dispatcher = Dispatcher(argv[1:], COMMAND_GROUPS)
-        dispatcher.run()
-    except CommandError as err:
-        message_handler.ended_cmderror(err)
-        retcode = err.retcode
-    except KeyboardInterrupt:
-        message_handler.ended_interrupt()
-        retcode = 1
-    except Exception as err:
-        message_handler.ended_crash(err)
-        retcode = 1
-    else:
-        message_handler.ended_ok()
-        retcode = 0
-
-    return retcode
+    #try:
+    env.ensure_charmcraft_environment_is_supported()
+    dispatcher = Dispatcher(argv[1:], COMMAND_GROUPS)
+    dispatcher.run()
+    #except CommandError as err:
+    #    message_handler.ended_cmderror(err)
+    #    retcode = err.retcode
+    #except KeyboardInterrupt:
+    #    message_handler.ended_interrupt()
+    #    retcode = 1
+    #except Exception as err:
+    #    message_handler.ended_crash(err)
+    #    retcode = 1
+    #else:
+    #    message_handler.ended_ok()
+    #    retcode = 0
+    #
+    #return retcode
 
 
 if __name__ == "__main__":

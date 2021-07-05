@@ -30,6 +30,8 @@ charmhub:
   registry-url = [HttpUrl] optional, defaults to "https://registry.jujucharms.com"
 
 parts:
+  charm:
+    prime: [list of strings]
   bundle:
     prime: [list of strings]
 
@@ -72,6 +74,12 @@ from charmcraft.utils import get_host_architecture, load_yaml
 
 class ModelConfigDefaults(
     pydantic.BaseModel, extra=pydantic.Extra.forbid, frozen=True, validate_all=True
+):
+    """Define Charmcraft's defaults for the BaseModel configuration."""
+
+
+class ModelConfigDefaultsNotFrozen(  # FIXME
+    pydantic.BaseModel, extra=pydantic.Extra.forbid, validate_all=True
 ):
     """Define Charmcraft's defaults for the BaseModel configuration."""
 
@@ -193,27 +201,29 @@ def format_pydantic_errors(errors, *, file_name: str = "charmcraft.yaml"):
     return "\n".join(combined)
 
 
-class Part(ModelConfigDefaults):
-    """Definition of part to build."""
+#class Part(ModelConfigDefaultsNotFrozen):
+#    """Definition of part to build."""
+#
+#    source: str = ""
+#    charm_requirements: List[str] = []
+#    prime: List[RelativePath] = []
 
-    prime: List[RelativePath] = []
 
-
-class Parts(ModelConfigDefaults):
-    """Definition of parts to build."""
-
-    bundle: Part = Part()
-
-    def get(self, part_name) -> Part:
-        """Get part by name.
-
-        :returns: Part if exists, None if not.
-
-        :raises KeyError: if part does not exist.
-        """
-        if part_name == "bundle":
-            return self.bundle
-        raise KeyError(part_name)
+# class Parts(ModelConfigDefaults):
+#     """Definition of parts to build."""
+#
+#     bundle: Part = Part()
+#
+#     def get(self, part_name) -> Part:
+#         """Get part by name.
+#
+#         :returns: Part if exists, None if not.
+#
+#         :raises KeyError: if part does not exist.
+#         """
+#         if part_name == "bundle":
+#             return self.bundle
+#         raise KeyError(part_name)
 
 
 # XXX Facundo 2020-05-31: for backwards compatibility, we'll support the user writing
@@ -265,7 +275,7 @@ class Config(ModelConfigDefaults, validate_all=False):
 
     type: Optional[str]
     charmhub: CharmhubConfig = CharmhubConfig()
-    parts: Parts = Parts()
+    parts: Dict[str, Any]
     bases: List[BasesConfiguration] = [
         BasesConfiguration(
             **{
