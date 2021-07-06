@@ -74,6 +74,7 @@ CHARM_FILES = [
     "metadata.yaml",
     DISPATCH_FILENAME,
     HOOKS_DIR,
+    VENV_DIRNAME,
 ]
 
 CHARM_OPTIONAL = [
@@ -224,7 +225,7 @@ class Builder:
             self._parts,
             entrypoint=self.entrypoint,
             work_dir=WORK_DIRNAME,
-            venv_dir=self.buildpath / VENV_DIRNAME,
+            venv_dir=VENV_DIRNAME,
             config=self.config
         )
 

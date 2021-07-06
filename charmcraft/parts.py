@@ -57,18 +57,20 @@ class CharmPlugin(plugins.Plugin):
 
     def get_build_environment(self):
         """Return a dictionary with the environment to use in the build step."""
+        venv_dir = self._part_info.part_build_dir / self._part_info.venv_dir
         return {
             # Add PATH to the python interpreter we always intend to use with
             # this plugin. It can be user overridden, but that is an explicit
             # choice made by a user.
-            "PATH": "{}/bin:${{PATH}}".format(self._part_info.venv_dir),
+            "PATH": "{}/bin:${{PATH}}".format(str(venv_dir)),
             "CHARMCRAFT_PYTHON_INTERPRETER": "python3",
         }
 
     def get_build_commands(self):
         """Return a list of commands to run during the build step."""
+        venv_dir = self._part_info.part_build_dir / self._part_info.venv_dir
         commands = [
-            '"${{CHARMCRAFT_PYTHON_INTERPRETER}}" -m venv "{}"'.format(self._part_info.venv_dir),
+            '"${{CHARMCRAFT_PYTHON_INTERPRETER}}" -m venv "{}"'.format(str(venv_dir)),
             'CHARMCRAFT_PYTHON_VENV_INTERP_PATH="{}/bin/${{CHARMCRAFT_PYTHON_INTERPRETER}}"'.format(
                 self._part_info.part_install_dir
             ),
@@ -80,7 +82,7 @@ class CharmPlugin(plugins.Plugin):
             python_packages = " ".join(
                 [shlex.quote(pkg) for pkg in options.charm_python_packages]
             )
-            python_packages_cmd = f"pip install -U {python_packages}"
+            python_packages_cmd = f"pip install --no-binary :all: -U {python_packages}"
             commands.append(python_packages_cmd)
 
         if options.charm_requirements:
@@ -90,9 +92,9 @@ class CharmPlugin(plugins.Plugin):
 
         install_dir = self._part_info.part_install_dir
 
-        commands = [
-            'cp --archive --link --no-dereference . "{}"'.format(install_dir),
-        ]
+        commands.append(
+            'cp --archive --link --no-dereference . "{}"'.format(install_dir)
+        )
 
         return commands
 
