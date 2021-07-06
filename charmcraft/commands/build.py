@@ -115,21 +115,7 @@ def format_charm_file_name(
     return "_".join([charm_name, _format_bases_config(bases_config)]) + ".charm"
 
 
-def _pip_needs_system():
-    """Determine whether pip3 defaults to --user, needing --system to turn it off."""
-    cmd = [
-        "python3",
-        "-c",
-        (
-            "from pip.commands.install import InstallCommand; "
-            'assert InstallCommand().cmd_opts.get_option("--system") is not None'
-        ),
-    ]
-    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return proc.returncode == 0
-
-
-def polite_exec(cmd):
+def xxx_polite_exec(cmd):
     """Execute a command, only showing output if error."""
     logger.debug("Running external command %s", cmd)
     try:

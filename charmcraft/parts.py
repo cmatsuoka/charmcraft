@@ -18,6 +18,7 @@
 
 import pathlib
 import shlex
+import subprocess
 from typing import Any, Dict, List, cast
 
 from craft_parts import LifecycleManager, Step, plugins
@@ -31,7 +32,7 @@ class CharmPluginProperties(plugins.PluginProperties, plugins.PluginModel):
 
     source: str = ""
     charm_requirements: List[str] = []
-    charm_python_packages: List[str] = ["pip", "setuptools", "wheel"]
+    charm_python_packages: List[str] = []
 
     @classmethod
     def unmarshal(cls, data: Dict[str, Any]):
@@ -57,24 +58,28 @@ class CharmPlugin(plugins.Plugin):
 
     def get_build_environment(self):
         """Return a dictionary with the environment to use in the build step."""
-        venv_dir = self._part_info.part_build_dir / self._part_info.venv_dir
+        plugin_venv_dir = self._part_info.work_dir / "venv"
+        venv_dir = self._part_info.part_install_dir / self._part_info.venv_dir
         return {
             # Add PATH to the python interpreter we always intend to use with
             # this plugin. It can be user overridden, but that is an explicit
             # choice made by a user.
-            "PATH": "{}/bin:${{PATH}}".format(str(venv_dir)),
-            "CHARMCRAFT_PYTHON_INTERPRETER": "python3",
+            "PATH": "{}/bin:{}/bin:${{PATH}}".format(str(venv_dir), str(plugin_venv_dir)),
         }
 
     def get_build_commands(self):
         """Return a list of commands to run during the build step."""
-        venv_dir = self._part_info.part_build_dir / self._part_info.venv_dir
+        plugin_venv_dir = self._part_info.work_dir / "venv"
+        venv_dir = self._part_info.part_install_dir / self._part_info.venv_dir
+        pip_install_cmd = f"pip3 install --target={venv_dir} --no-binary :all:"
         commands = [
-            '"${{CHARMCRAFT_PYTHON_INTERPRETER}}" -m venv "{}"'.format(str(venv_dir)),
-            'CHARMCRAFT_PYTHON_VENV_INTERP_PATH="{}/bin/${{CHARMCRAFT_PYTHON_INTERPRETER}}"'.format(
-                self._part_info.part_install_dir
-            ),
+            'python3 -m venv "{}"'.format(plugin_venv_dir),
+            "pip install -U pip setuptools wheel",
         ]
+
+        if _pip_needs_system():
+            logger.debug("adding --system to work around pip3 defaulting to --user")
+            pip_install_cmd += "--system"
 
         options = cast(CharmPluginProperties, self._options)
 
@@ -82,21 +87,33 @@ class CharmPlugin(plugins.Plugin):
             python_packages = " ".join(
                 [shlex.quote(pkg) for pkg in options.charm_python_packages]
             )
-            python_packages_cmd = f"pip install --no-binary :all: -U {python_packages}"
+            python_packages_cmd = f"{pip_install_cmd} -U {python_packages}"
             commands.append(python_packages_cmd)
 
         if options.charm_requirements:
             requirements = " ".join(f"-r {r!r}" for r in options.charm_requirements)
-            requirements_cmd = f"pip install -U {requirements}"
+            requirements_cmd = f"{pip_install_cmd} -U {requirements}"
             commands.append(requirements_cmd)
 
         install_dir = self._part_info.part_install_dir
-
         commands.append(
             'cp --archive --link --no-dereference . "{}"'.format(install_dir)
         )
 
         return commands
+
+def _pip_needs_system():
+    """Determine whether pip3 defaults to --user, needing --system to turn it off."""
+    cmd = [
+        "python3",
+        "-c",
+        (
+            "from pip.commands.install import InstallCommand; "
+            'assert InstallCommand().cmd_opts.get_option("--system") is not None'
+        ),
+    ]
+    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return proc.returncode == 0
 
 
 def register_charm_plugin():
