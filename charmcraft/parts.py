@@ -102,7 +102,12 @@ def register_charm_plugin():
 
 
 def process_parts(
-    partdef: Dict[str, Any], *, entrypoint: str, venv_dir: pathlib.Path, config: Config
+    partdef: Dict[str, Any],
+    *,
+    entrypoint: str,
+    work_dir: pathlib.Path,
+    venv_dir: pathlib.Path,
+    config: Config,
 ) -> pathlib.Path:
     # set the cache dir for parts package management
     cache_dir = BaseDirectory.save_cache_path("charmcraft")
@@ -110,6 +115,7 @@ def process_parts(
     lcm = LifecycleManager(
         {"parts": partdef},
         application_name="charmcraft",
+        work_dir=work_dir,
         cache_dir=cache_dir,
         entrypoint=entrypoint,
         venv_dir=venv_dir,

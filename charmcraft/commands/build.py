@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 # Some constants that are used through the code.
 BUILD_DIRNAME = "build"
+WORK_DIRNAME = "work_dir"
 VENV_DIRNAME = "venv"
 
 # The file name and template for the dispatch script
@@ -214,14 +215,15 @@ class Builder:
         else:
             self._prime.append(str(entrypoint.parents[0]))
 
-        print("=== charm part:", self._charm_part)
-
         # set the source for building to the indicated project dir
         self._charm_part["source"] = str(self.buildpath)
+
+        print("=== charm part:", self._charm_part)
 
         prime_dir = process_parts(
             self._parts,
             entrypoint=self.entrypoint,
+            work_dir=WORK_DIRNAME,
             venv_dir=self.buildpath / VENV_DIRNAME,
             config=self.config
         )
@@ -382,7 +384,9 @@ class Builder:
                 rel_path = rel_basedir / name
                 abs_path = abs_basedir / name
 
-                if self.ignore_rules.match(str(rel_path), is_dir=True):
+                if name == WORK_DIRNAME:
+                    ignored.append(pos)
+                elif self.ignore_rules.match(str(rel_path), is_dir=True):
                     logger.debug(
                         "Ignoring directory because of rules: %r", str(rel_path)
                     )
