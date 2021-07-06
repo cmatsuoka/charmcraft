@@ -23,12 +23,8 @@ import pathlib
 import shutil
 import subprocess
 import zipfile
-from textwrap import dedent
-from typing import Any, Dict, List, Optional, cast
+from typing import List, Optional
 
-from xdg import BaseDirectory  # type: ignore
-
-from craft_parts import plugins, LifecycleManager, Step
 from craft_providers import Executor
 
 from charmcraft.bases import check_if_base_matches_host
@@ -43,6 +39,7 @@ from charmcraft.jujuignore import JujuIgnore, default_juju_ignore
 from charmcraft.logsetup import message_handler
 from charmcraft.manifest import create_manifest
 from charmcraft.metadata import parse_metadata_yaml
+from charmcraft.parts import process_parts, register_charm_plugin
 from charmcraft.providers import (
     capture_logs_from_instance,
     ensure_provider_is_available,
@@ -158,80 +155,6 @@ def relativise(src, dst):
     return pathlib.Path(os.path.relpath(str(dst), str(src.parent)))
 
 
-class CharmPluginProperties(plugins.PluginProperties, plugins.PluginModel):
-    """Parameters used in charm building."""
-
-    source: str = ""
-    charm_requirements: List[str] = []
-    charm_packages: List[str] = ["pip", "setuptools", "wheel"]
-
-    @classmethod
-    def unmarshal(cls, data: Dict[str, Any]):
-        plugin_data = plugins.extract_plugin_properties(
-            data, plugin_name="charm", required=["source"]
-        )
-        return cls(**plugin_data)
-
-
-class CharmPlugin(plugins.Plugin):
-    """Build the charm."""
-
-    properties_class = CharmPluginProperties
-
-    @classmethod
-    def get_build_snaps(self):
-        """Return a set of required snaps to install in the build environment."""
-        return set()
-
-    def get_build_packages(self):
-        """Return a set of required packages to install in the build environment."""
-        return {"findutils", "python3-dev", "python3-venv"}
-
-    def get_build_environment(self):
-        """Return a dictionary with the environment to use in the build step."""
-        return {
-            # Add PATH to the python interpreter we always intend to use with
-            # this plugin. It can be user overridden, but that is an explicit
-            # choice made by a user.
-            "PATH": "{}/bin:${{PATH}}".format(self._part_info.part_install_dir),
-            "CHARMCRAFT_PYTHON_INTERPRETER": "python3",
-            "CHARMCRAFT_PYTHON_VENV_ARGS": "",
-        }
-
-    def get_build_commands(self):
-        """Return a list of commands to run during the build step."""
-        commands = [
-            '"${{CHARMCRAFT_PYTHON_INTERPRETER}}" -m venv ${{CHARMCRAFT_PYTHON_VENV_ARGS}} "{}"'.format(
-                self._part_info.part_install_dir
-            ),
-            'CHARMCRAFT_PYTHON_VENV_INTERP_PATH="{}/bin/${{CHARMCRAFT_PYTHON_INTERPRETER}}"'.format(
-                self._part_info.part_install_dir
-            ),
-        ]
-
-        options = cast(CharmPluginProperties, self._options)
-
-        if options.charm_requirements:
-            requirements = " ".join(f"-r {r!r}" for r in options.charm_requirements)
-            requirements_cmd = f"pip install -U {requirements}"
-            commands.append(requirements_cmd)
-
-        install_dir = self._part_info.part_install_dir
-
-        commands = [
-            'cp --archive --link --no-dereference . "{}"'.format(install_dir),
-        ]
-
-        return commands
-
-
-# def _build_callback(step_info: StepInfo) -> bool:
-#     if step_info.part_name != "charm":
-#         return True
-#
-#     return True
-
-
 class Builder:
     """The package builder."""
 
@@ -264,8 +187,7 @@ class Builder:
             shutil.rmtree(str(self.buildpath))
         self.buildpath.mkdir()
 
-        # register the charm plugin
-        plugins.register({"charm": CharmPlugin})
+        register_charm_plugin()
 
         # update parts definition
 
@@ -278,16 +200,17 @@ class Builder:
         if self.requirement_paths:
             self._charm_part["charm-requirements"] = [str(p) for p in self.requirement_paths]
 
-        # create prime filter
+        # include optional charm files
         self._prime.extend(CHARM_FILES)
         for fn in CHARM_OPTIONAL:
             path = self.buildpath / fn
             if path.exists():
                 self._prime.append(fn)
 
+        # include entrypoint file or directory
         entrypoint = linked_entrypoint.relative_to(self.buildpath)
         if str(entrypoint) == entrypoint.name:
-            self._prime.append(str(entrypoing))
+            self._prime.append(str(entrypoint))
         else:
             self._prime.append(str(entrypoint.parents[0]))
 
@@ -296,24 +219,14 @@ class Builder:
         # set the source for building to the indicated project dir
         self._charm_part["source"] = str(self.buildpath)
 
-        # set the cache dir for parts package management
-        cache_dir = BaseDirectory.save_cache_path("charmcraft")
-
-        lcm = LifecycleManager(
-            {"parts": self._parts},
-            application_name="charmcraft",
-            cache_dir=cache_dir,
+        prime_dir = process_parts(
+            self._parts,
             entrypoint=self.entrypoint,
+            venv_dir=self.buildpath / VENV_DIRNAME,
             config=self.config
         )
 
-        actions = lcm.plan(Step.PRIME)
-        with lcm.action_executor() as aex:
-            aex.execute(actions)
-
-        stage_dir = lcm.project_info.stage_dir
-
-        zipname = self.handle_package(lcm.project_info.prime_dir, bases_config)
+        zipname = self.handle_package(prime_dir, bases_config)
 
         logger.info("Created '%s'.", zipname)
         return zipname
@@ -554,11 +467,34 @@ class Builder:
                 relative_link = relativise(dest_hook, dispatch_path)
                 dest_hook.symlink_to(relative_link)
 
-    def handle_dependencies(self):
+    def xxx_handle_dependencies(self):
         """Handle from-directory and virtualenv dependencies."""
         logger.debug("Installing dependencies")
 
         # virtualenv with other dependencies (if any)
+        if self.requirement_paths:
+            retcode = polite_exec(["pip3", "list"])
+            if retcode:
+                raise CommandError("problems using pip")
+
+            venvpath = self.buildpath / VENV_DIRNAME
+            cmd = [
+                "pip3",
+                "install",  # base command
+                "--target={}".format(
+                    venvpath
+                ),  # put all the resulting files in that specific dir
+            ]
+            if _pip_needs_system():
+                logger.debug("adding --system to work around pip3 defaulting to --user")
+                cmd.append("--system")
+            for reqspath in self.requirement_paths:
+                cmd.append(
+                    "--requirement={}".format(reqspath)
+                )  # the dependencies file(s)
+            retcode = polite_exec(cmd)
+            if retcode:
+                raise CommandError("problems installing dependencies")
 
     def handle_package(
         self,
