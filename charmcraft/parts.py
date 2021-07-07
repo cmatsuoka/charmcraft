@@ -18,7 +18,6 @@
 
 import pathlib
 import shlex
-import subprocess
 from typing import Any, Dict, List, cast
 
 from craft_parts import LifecycleManager, Step, plugins
@@ -77,10 +76,6 @@ class CharmPlugin(plugins.Plugin):
             "pip install -U pip setuptools wheel",
         ]
 
-        if _pip_needs_system():
-            logger.debug("adding --system to work around pip3 defaulting to --user")
-            pip_install_cmd += "--system"
-
         options = cast(CharmPluginProperties, self._options)
 
         if options.charm_python_packages:
@@ -101,19 +96,6 @@ class CharmPlugin(plugins.Plugin):
         )
 
         return commands
-
-def _pip_needs_system():
-    """Determine whether pip3 defaults to --user, needing --system to turn it off."""
-    cmd = [
-        "python3",
-        "-c",
-        (
-            "from pip.commands.install import InstallCommand; "
-            'assert InstallCommand().cmd_opts.get_option("--system") is not None'
-        ),
-    ]
-    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return proc.returncode == 0
 
 
 def register_charm_plugin():
