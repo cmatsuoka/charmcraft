@@ -128,29 +128,6 @@ def _pip_needs_system():
     return proc.returncode == 0
 
 
-def polite_exec(cmd):
-    """Execute a command, only showing output if error."""
-    logger.debug("Running external command %s", cmd)
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-        )
-    except Exception as err:
-        logger.error("Executing %s crashed with %r", cmd, err)
-        return 1
-
-    for line in proc.stdout:
-        logger.debug(":: %s", line.rstrip())
-    retcode = proc.wait()
-
-    if retcode:
-        logger.error("Executing %s failed with return code %d", cmd, retcode)
-    return retcode
-
-
 def relativise(src, dst):
     """Build a relative path from src to dst."""
     return pathlib.Path(os.path.relpath(str(dst), str(src.parent)))
@@ -496,35 +473,6 @@ class Builder:
             if not dest_hook.exists():
                 relative_link = relativise(dest_hook, dispatch_path)
                 dest_hook.symlink_to(relative_link)
-
-    def handle_dependencies(self):
-        """Handle from-directory and virtualenv dependencies."""
-        logger.debug("Installing dependencies")
-
-        # virtualenv with other dependencies (if any)
-        if self.requirement_paths:
-            retcode = polite_exec(["pip3", "list"])
-            if retcode:
-                raise CommandError("problems using pip")
-
-            venvpath = self.buildpath / VENV_DIRNAME
-            cmd = [
-                "pip3",
-                "install",  # base command
-                "--target={}".format(
-                    venvpath
-                ),  # put all the resulting files in that specific dir
-            ]
-            if _pip_needs_system():
-                logger.debug("adding --system to work around pip3 defaulting to --user")
-                cmd.append("--system")
-            for reqspath in self.requirement_paths:
-                cmd.append(
-                    "--requirement={}".format(reqspath)
-                )  # the dependencies file(s)
-            retcode = polite_exec(cmd)
-            if retcode:
-                raise CommandError("problems installing dependencies")
 
     def handle_package(
         self,
