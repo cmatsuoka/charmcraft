@@ -21,6 +21,7 @@ import shlex
 from typing import Any, Dict, List, Set, cast
 
 from craft_parts import LifecycleManager, Step, plugins
+from craft_parts.errors import PartsError  # noqa: F401
 from xdg import BaseDirectory  # type: ignore
 
 

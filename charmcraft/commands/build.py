@@ -38,7 +38,7 @@ from charmcraft.jujuignore import JujuIgnore, default_juju_ignore
 from charmcraft.logsetup import message_handler
 from charmcraft.manifest import create_manifest
 from charmcraft.metadata import parse_metadata_yaml
-from charmcraft.parts import PartsLifecycle, Step
+from charmcraft.parts import PartsError, PartsLifecycle, Step
 from charmcraft.providers import (
     capture_logs_from_instance,
     ensure_provider_is_available,
@@ -216,12 +216,15 @@ class Builder:
         # set source for buiding
         self._charm_part["source"] = str(self.buildpath)
 
-        lifecycle = PartsLifecycle(
-            self._parts,
-            work_dir=WORK_DIRNAME,
-            venv_dir=VENV_DIRNAME,
-        )
-        lifecycle.run(Step.PRIME)
+        try:
+            lifecycle = PartsLifecycle(
+                self._parts,
+                work_dir=WORK_DIRNAME,
+                venv_dir=VENV_DIRNAME,
+            )
+            lifecycle.run(Step.PRIME)
+        except PartsError as err:
+            raise CommandError(err)
 
         zipname = self.handle_package(lifecycle.prime_dir, bases_config)
 
