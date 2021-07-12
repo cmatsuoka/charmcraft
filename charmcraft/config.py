@@ -240,29 +240,6 @@ def format_pydantic_errors(errors, *, file_name: str = "charmcraft.yaml"):
     return "\n".join(combined)
 
 
-class Part(ModelConfigDefaults):
-    """Definition of part to build."""
-
-    prime: List[RelativePath] = []
-
-
-class Parts(ModelConfigDefaults):
-    """Definition of parts to build."""
-
-    bundle: Part = Part()
-
-    def get(self, part_name) -> Part:
-        """Get part by name.
-
-        :returns: Part if exists, None if not.
-
-        :raises KeyError: if part does not exist.
-        """
-        if part_name == "bundle":
-            return self.bundle
-        raise KeyError(part_name)
-
-
 # XXX Facundo 2020-05-31: for backwards compatibility, we'll support the user writing
 # these attributes using underscores; when that period is done we remove the
 # `allow_population_by_field_name` parameter here in the class definition and only
@@ -325,7 +302,7 @@ class Config(ModelConfigDefaults, validate_all=False):
 
     type: Optional[str]
     charmhub: CharmhubConfig = CharmhubConfig()
-    parts: Parts = Parts()
+    parts: Dict[str, Any] = {}
     bases: List[BasesConfiguration] = [
         BasesConfiguration(
             **{
@@ -344,6 +321,14 @@ class Config(ModelConfigDefaults, validate_all=False):
         if charm_type not in ["bundle", "charm"]:
             raise ValueError("must be either 'charm' or 'bundle'")
         return charm_type
+
+    @pydantic.validator("parts", each_item=True)
+    def validate_charm_parts(cls, part):
+        """Verify basic charm part model types (craft-parts will re-validate this)."""
+        prime = part.get("prime")
+        if prime and not isinstance(prime, list):
+            raise TypeError("'prime' must be a list")
+        return part
 
     @classmethod
     def expand_short_form_bases(cls, bases: List[Dict[str, Any]]) -> None:

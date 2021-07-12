@@ -38,6 +38,7 @@ from charmcraft.jujuignore import JujuIgnore, default_juju_ignore
 from charmcraft.logsetup import message_handler
 from charmcraft.manifest import create_manifest
 from charmcraft.metadata import parse_metadata_yaml
+from charmcraft.parts import PartsLifecycle, Step
 from charmcraft.providers import (
     capture_logs_from_instance,
     ensure_provider_is_available,
@@ -50,6 +51,7 @@ logger = logging.getLogger(__name__)
 
 # Some constants that are used through the code.
 BUILD_DIRNAME = "build"
+WORK_DIRNAME = "work_dir"
 VENV_DIRNAME = "venv"
 
 # The file name and template for the dispatch script
@@ -66,6 +68,22 @@ JUJU_DISPATCH_PATH="${{JUJU_DISPATCH_PATH:-$0}}" PYTHONPATH=lib:venv ./{entrypoi
 # The minimum set of hooks to be provided for compatibility with old Juju
 MANDATORY_HOOK_NAMES = {"install", "start", "upgrade-charm"}
 HOOKS_DIR = "hooks"
+
+CHARM_FILES = [
+    "metadata.yaml",
+    DISPATCH_FILENAME,
+    HOOKS_DIR,
+    VENV_DIRNAME,
+]
+
+CHARM_OPTIONAL = [
+    "config.yaml",
+    "metrics.yaml",
+    "actions.yaml",
+    "lxd-profile.yaml",
+    "templates",
+    "version",
+]
 
 
 def _format_run_on_base(base: Base) -> str:
@@ -151,6 +169,10 @@ class Builder:
         self.config = config
         self.metadata = parse_metadata_yaml(self.charmdir)
 
+        self._parts = self.config.parts.copy()
+        self._charm_part = self._parts.setdefault("charm", {})
+        self._prime = self._charm_part.setdefault("prime", [])
+
     def build_charm(self, bases_config: BasesConfiguration) -> str:
         """Build the charm.
 
@@ -168,8 +190,37 @@ class Builder:
 
         linked_entrypoint = self.handle_generic_paths()
         self.handle_dispatcher(linked_entrypoint)
-        self.handle_dependencies()
-        zipname = self.handle_package(bases_config)
+
+        # handle dependencies
+        if self.requirement_paths:
+            self._charm_part["charm-requirements"] = [str(p) for p in self.requirement_paths]
+
+        # include optional charm files
+        self._prime.extend(CHARM_FILES)
+        for fn in CHARM_OPTIONAL:
+            path = self.buildpath / fn
+            if path.exists():
+                self._prime.append(fn)
+
+        # handle entrypoint and include file or directory
+        entrypoint = self.entrypoint.relative_to(self.charmdir)
+        self._charm_part["charm-entrypoint"] = str(entrypoint)
+        if str(entrypoint) == entrypoint.name:
+            self._prime.append(str(entrypoint))
+        else:
+            self._prime.append(str(entrypoint.parents[0]))
+
+        # set source for buiding
+        self._charm_part["source"] = str(self.buildpath)
+
+        lifecycle = PartsLifecycle(
+            self._parts,
+            work_dir=WORK_DIRNAME,
+            venv_dir=VENV_DIRNAME,
+        )
+        lifecycle.run(Step.PRIME)
+
+        zipname = self.handle_package(lifecycle.prime_dir, bases_config)
 
         logger.info("Created '%s'.", zipname)
         return zipname
@@ -468,16 +519,20 @@ class Builder:
             if retcode:
                 raise CommandError("problems installing dependencies")
 
-    def handle_package(self, bases_config: Optional[BasesConfiguration] = None):
+    def handle_package(
+        self,
+        prime_dir: pathlib.Path,
+        bases_config: Optional[BasesConfiguration] = None
+    ):
         """Handle the final package creation."""
         logger.debug("Creating the package itself")
         zipname = format_charm_file_name(self.metadata.name, bases_config)
         zipfh = zipfile.ZipFile(zipname, "w", zipfile.ZIP_DEFLATED)
-        for dirpath, dirnames, filenames in os.walk(self.buildpath, followlinks=True):
+        for dirpath, dirnames, filenames in os.walk(prime_dir, followlinks=True):
             dirpath = pathlib.Path(dirpath)
             for filename in filenames:
                 filepath = dirpath / filename
-                zipfh.write(str(filepath), str(filepath.relative_to(self.buildpath)))
+                zipfh.write(str(filepath), str(filepath.relative_to(prime_dir)))
 
         zipfh.close()
         return zipname
