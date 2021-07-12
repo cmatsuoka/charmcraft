@@ -188,8 +188,19 @@ class Builder:
 
         create_manifest(self.buildpath, self.config.project.started_at, bases_config)
 
+        # handle entrypoint and include file or directory
+        self._charm_part.setdefault("charm-entrypoint", "src/charm.py")
+        if self.entrypoint:
+            self._charm_part["charm-entrypoint"] = str(self.entrypoint.relative_to(self.charmdir))
+
         linked_entrypoint = self.handle_generic_paths()
         self.handle_dispatcher(linked_entrypoint)
+
+        entrypoint = linked_entrypoint.relative_to(self.buildpath)
+        if str(entrypoint) == entrypoint.name:
+            self._prime.append(str(entrypoint))
+        else:
+            self._prime.append(str(entrypoint.parents[0]))
 
         # handle dependencies
         if self.requirement_paths:
@@ -201,14 +212,6 @@ class Builder:
             path = self.buildpath / fn
             if path.exists():
                 self._prime.append(fn)
-
-        # handle entrypoint and include file or directory
-        entrypoint = self.entrypoint.relative_to(self.charmdir)
-        self._charm_part["charm-entrypoint"] = str(entrypoint)
-        if str(entrypoint) == entrypoint.name:
-            self._prime.append(str(entrypoint))
-        else:
-            self._prime.append(str(entrypoint.parents[0]))
 
         # set source for buiding
         self._charm_part["source"] = str(self.buildpath)
@@ -446,7 +449,8 @@ class Builder:
                     logger.debug("Ignoring file because of type: %r", str(rel_path))
 
         # the linked entrypoint is calculated here because it's when it's really in the build dir
-        linked_entrypoint = self.buildpath / self.entrypoint.relative_to(self.charmdir)
+        linked_entrypoint = self.buildpath / self._charm_part["charm-entrypoint"]
+
         return linked_entrypoint
 
     def handle_dispatcher(self, linked_entrypoint):
@@ -611,9 +615,9 @@ class Validator:
     def validate_entrypoint(self, filepath):
         """Validate that the entrypoint exists and is executable."""
         if filepath is None:
-            filepath = self.basedir / "src" / "charm.py"
-        else:
-            filepath = filepath.expanduser().absolute()
+            return None
+
+        filepath = filepath.expanduser().absolute()
 
         if not filepath.exists():
             raise CommandError(
@@ -637,9 +641,6 @@ class Validator:
         If not specified, default to requirements.txt if there.
         """
         if filepaths is None:
-            req = self.basedir / "requirements.txt"
-            if req.exists() and os.access(req, os.R_OK):
-                return [req]
             return []
 
         filepaths = [x.expanduser().absolute() for x in filepaths]
