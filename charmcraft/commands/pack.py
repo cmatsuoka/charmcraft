@@ -23,7 +23,6 @@ from argparse import Namespace
 from charmcraft.cmdbase import BaseCommand, CommandError
 from charmcraft.commands import build
 from charmcraft.manifest import create_manifest
-from charmcraft.parts import setup_parts
 from charmcraft.utils import SingleOptionEnsurer, load_yaml, useful_filepath
 
 logger = logging.getLogger(__name__)
@@ -132,8 +131,6 @@ class PackCommand(BaseCommand):
 
     def run(self, parsed_args):
         """Run the command."""
-        setup_parts()
-
         # decide if this will work on a charm or a bundle
         if self.config.type == "charm" or not self.config.project.config_provided:
             self._pack_charm(parsed_args)

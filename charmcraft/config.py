@@ -73,6 +73,7 @@ from charmcraft.env import (
     get_managed_environment_project_path,
     is_charmcraft_running_in_managed_mode,
 )
+from charmcraft.parts import validate_part
 from charmcraft.utils import get_host_architecture, load_yaml
 
 
@@ -322,13 +323,23 @@ class Config(ModelConfigDefaults, validate_all=False):
             raise ValueError("must be either 'charm' or 'bundle'")
         return charm_type
 
+    @pydantic.validator("parts", pre=True)
+    def validate_charm_parts(cls, parts):
+        """Verify parts type (craft-parts will re-validate this)."""
+        if not isinstance(parts, dict):
+            raise TypeError("value must be a dictionary")
+        for name, part in parts.items():
+            if not isinstance(part, dict):
+                raise TypeError(f"part {name!r} must be a dictionary")
+            # implicit plugin fixup
+            if "plugin" not in part:
+                part["plugin"] = name
+        return parts
+
     @pydantic.validator("parts", each_item=True)
-    def validate_charm_parts(cls, part):
-        """Verify basic charm part model types (craft-parts will re-validate this)."""
-        prime = part.get("prime")
-        if prime and not isinstance(prime, list):
-            raise TypeError("'prime' must be a list")
-        return part
+    def validate_charm_part(cls, item):
+        validate_part(item)
+        return item
 
     @classmethod
     def expand_short_form_bases(cls, bases: List[Dict[str, Any]]) -> None:

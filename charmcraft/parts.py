@@ -16,13 +16,19 @@
 
 """Craft-parts setup and plugins."""
 
+import logging
 import pathlib
 import shlex
 from typing import Any, Dict, List, Set, cast
 
 from craft_parts import LifecycleManager, Step, plugins
-from craft_parts.errors import PartsError  # noqa: F401
+from craft_parts.parts import PartSpec
+from craft_parts.errors import PartsError
 from xdg import BaseDirectory  # type: ignore
+
+from charmcraft.cmdbase import CommandError
+
+logger = logging.getLogger(__name__)
 
 
 class CharmPluginProperties(plugins.PluginProperties, plugins.PluginModel):
@@ -139,6 +145,29 @@ def setup_parts():
     plugins.register({"charm": CharmPlugin})
 
 
+def validate_part(data: Dict[str, Any]) -> None:
+    """Validate the given part data against common and plugin models.
+
+    :param data: The part data to validate.
+    """
+    if not isinstance(data, dict):
+        raise TypeError(f"value must be a dictionary")
+
+    spec = data.copy()
+    plugin_name = spec.get("plugin", "")
+    if not plugin_name:
+        raise ValueError(f"'plugin' not defined")
+
+    plugin_class = plugins.get_plugin_class(plugin_name)
+
+    # validate plugin properties
+    plugin_class.properties_class.unmarshal(spec)
+
+    # validate common part properties
+    plugins.strip_plugin_properties(spec, plugin_name=plugin_name)
+    PartSpec(**spec)
+
+
 class PartsLifecycle:
     def __init__(
         self,
@@ -150,20 +179,26 @@ class PartsLifecycle:
         # set the cache dir for parts package management
         cache_dir = BaseDirectory.save_cache_path("charmcraft")
 
-        self._lcm = LifecycleManager(
-            {"parts": all_parts},
-            application_name="charmcraft",
-            work_dir=work_dir,
-            cache_dir=cache_dir,
-            venv_dir=venv_dir,
-        )
-        self._lcm.refresh_packages_list()
+        try:
+            self._lcm = LifecycleManager(
+                {"parts": all_parts},
+                application_name="charmcraft",
+                work_dir=work_dir,
+                cache_dir=cache_dir,
+                venv_dir=venv_dir,
+            )
+            self._lcm.refresh_packages_list()
+        except PartsError as err:
+            raise CommandError(err)
 
     @property
     def prime_dir(self):
         return self._lcm.project_info.prime_dir
 
     def run(self, target_step: Step) -> None:
-        actions = self._lcm.plan(target_step)
-        with self._lcm.action_executor() as aex:
-            aex.execute(actions)
+        try:
+            actions = self._lcm.plan(target_step)
+            with self._lcm.action_executor() as aex:
+                aex.execute(actions)
+        except PartsError as err:
+            raise CommandError(err)
