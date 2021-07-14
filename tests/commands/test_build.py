@@ -42,7 +42,6 @@ from charmcraft.commands.build import (
     Builder,
     Validator,
     format_charm_file_name,
-    polite_exec,
     relativise,
 )
 from charmcraft.config import Base, BasesConfiguration, load
@@ -248,18 +247,6 @@ def test_validator_entrypoint_simple(tmp_path, config):
     assert resp == testfile
 
 
-def test_validator_entrypoint_default(tmp_path, config):
-    """'entrypoint' param: default value."""
-    default_entrypoint = tmp_path / "src" / "charm.py"
-    default_entrypoint.parent.mkdir()
-    default_entrypoint.touch(mode=0o777)
-
-    validator = Validator(config)
-    validator.basedir = tmp_path
-    resp = validator.validate_entrypoint(None)
-    assert resp == default_entrypoint
-
-
 def test_validator_entrypoint_absolutized(tmp_path, monkeypatch, config):
     """'entrypoint' param: check it's made absolute."""
     # change dir to the temp one, where we will have the 'dirX/file.py' stuff
@@ -347,6 +334,7 @@ def test_validator_requirement_multiple(tmp_path, config):
     assert resp == [testfile1, testfile2]
 
 
+@pytest.mark.skip("requirements can now be set in parts")
 def test_validator_requirement_default_present_ok(tmp_path, config):
     """'requirement' param: default value when a requirements.txt is there and readable."""
     default_requirement = tmp_path / "requirements.txt"
@@ -358,6 +346,7 @@ def test_validator_requirement_default_present_ok(tmp_path, config):
     assert resp == [default_requirement]
 
 
+@pytest.mark.skip("requirements can now be set in parts")
 def test_validator_requirement_default_present_not_readable(tmp_path, config):
     """'requirement' param: default value when a requirements.txt is there but not readable."""
     default_requirement = tmp_path / "requirements.txt"
@@ -410,68 +399,6 @@ def test_validator_requirement_exist(config):
     expected_msg = "the requirements file was not found: '/not_really_there.txt'"
     with pytest.raises(CommandError, match=expected_msg):
         validator.validate_requirement([pathlib.Path("/not_really_there.txt")])
-
-
-# --- Polite Executor tests
-
-
-def test_politeexec_base(caplog):
-    """Basic execution."""
-    caplog.set_level(logging.ERROR, logger="charmcraft")
-
-    cmd = ["echo", "HELO"]
-    retcode = polite_exec(cmd)
-    assert retcode == 0
-    assert not caplog.records
-
-
-def test_politeexec_stdout_logged(caplog):
-    """The standard output is logged in debug."""
-    caplog.set_level(logging.DEBUG, logger="charmcraft")
-
-    cmd = ["echo", "HELO"]
-    polite_exec(cmd)
-    expected = [
-        "Running external command ['echo', 'HELO']",
-        ":: HELO",
-    ]
-    assert expected == [rec.message for rec in caplog.records]
-
-
-def test_politeexec_stderr_logged(caplog):
-    """The standard error is logged in debug."""
-    caplog.set_level(logging.DEBUG, logger="charmcraft")
-
-    cmd = [sys.executable, "-c", "import sys; print('weird, huh?', file=sys.stderr)"]
-    polite_exec(cmd)
-    expected = [
-        "Running external command " + str(cmd),
-        ":: weird, huh?",
-    ]
-    assert expected == [rec.message for rec in caplog.records]
-
-
-def test_politeexec_failed(caplog):
-    """It's logged in error if cmd fails."""
-    caplog.set_level(logging.ERROR, logger="charmcraft")
-
-    cmd = [sys.executable, "-c", "exit(3)"]
-    retcode = polite_exec(cmd)
-    assert retcode == 3
-    expected_msg = "Executing {} failed with return code 3".format(cmd)
-    assert any(expected_msg in rec.message for rec in caplog.records)
-
-
-def test_politeexec_crashed(caplog, tmp_path):
-    """It's logged in error if cmd fails."""
-    caplog.set_level(logging.ERROR, logger="charmcraft")
-    nonexistent = tmp_path / "whatever"
-
-    cmd = [str(nonexistent)]
-    retcode = polite_exec(cmd)
-    assert retcode == 1
-    expected_msg = "Executing {} crashed with FileNotFoundError".format(cmd)
-    assert any(expected_msg in rec.message for rec in caplog.records)
 
 
 # --- (real) build tests
@@ -1776,195 +1703,6 @@ def test_build_dispatcher_classic_hooks_linking_charm_replaced(
     assert expected in [rec.message for rec in caplog.records]
 
 
-def test_build_dependencies_virtualenv_simple(tmp_path, config):
-    """A virtualenv is created with the specified requirements file."""
-    metadata = tmp_path / CHARM_METADATA
-    metadata.write_text("name: crazycharm")
-    build_dir = tmp_path / BUILD_DIRNAME
-    build_dir.mkdir()
-
-    builder = Builder(
-        {
-            "from": tmp_path,
-            "entrypoint": "whatever",
-            "requirement": ["reqs.txt"],
-        },
-        config,
-    )
-
-    with patch("charmcraft.commands.build.subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 1
-        with patch("charmcraft.commands.build.polite_exec") as mock:
-            mock.return_value = 0
-            builder.handle_dependencies()
-
-    envpath = build_dir / VENV_DIRNAME
-    assert mock.mock_calls == [
-        call(["pip3", "list"]),
-        call(
-            ["pip3", "install", "--target={}".format(envpath), "--requirement=reqs.txt"]
-        ),
-    ]
-    assert mock_run.mock_calls == [
-        call(
-            [
-                "python3",
-                "-c",
-                (
-                    "from pip.commands.install import InstallCommand; "
-                    'assert InstallCommand().cmd_opts.get_option("--system") is not None'
-                ),
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        ),
-    ]
-
-
-def test_build_dependencies_needs_system(tmp_path, config):
-    """pip3 is called with --system when pip3 needs it."""
-    metadata = tmp_path / CHARM_METADATA
-    metadata.write_text("name: crazycharm")
-    build_dir = tmp_path / BUILD_DIRNAME
-    build_dir.mkdir()
-
-    builder = Builder(
-        {
-            "from": tmp_path,
-            "entrypoint": "whatever",
-            "requirement": ["reqs"],
-        },
-        config,
-    )
-
-    with patch("charmcraft.commands.build.subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 0
-        with patch("charmcraft.commands.build.polite_exec") as mock:
-            mock.return_value = 0
-            builder.handle_dependencies()
-
-    envpath = build_dir / VENV_DIRNAME
-    assert mock.mock_calls == [
-        call(["pip3", "list"]),
-        call(
-            [
-                "pip3",
-                "install",
-                "--target={}".format(envpath),
-                "--system",
-                "--requirement=reqs",
-            ]
-        ),
-    ]
-
-
-def test_build_dependencies_virtualenv_multiple(tmp_path, config):
-    """A virtualenv is created with multiple requirements files."""
-    metadata = tmp_path / CHARM_METADATA
-    metadata.write_text("name: crazycharm")
-    build_dir = tmp_path / BUILD_DIRNAME
-    build_dir.mkdir()
-
-    builder = Builder(
-        {
-            "from": tmp_path,
-            "entrypoint": "whatever",
-            "requirement": ["reqs1.txt", "reqs2.txt"],
-        },
-        config,
-    )
-
-    with patch("charmcraft.commands.build.subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 1
-        with patch("charmcraft.commands.build.polite_exec") as mock:
-            mock.return_value = 0
-            builder.handle_dependencies()
-
-    envpath = build_dir / VENV_DIRNAME
-    assert mock.mock_calls == [
-        call(["pip3", "list"]),
-        call(
-            [
-                "pip3",
-                "install",
-                "--target={}".format(envpath),
-                "--requirement=reqs1.txt",
-                "--requirement=reqs2.txt",
-            ]
-        ),
-    ]
-
-
-def test_build_dependencies_virtualenv_none(tmp_path, config):
-    """The virtualenv is NOT created if no needed."""
-    metadata = tmp_path / CHARM_METADATA
-    metadata.write_text("name: crazycharm")
-    build_dir = tmp_path / BUILD_DIRNAME
-    build_dir.mkdir()
-
-    builder = Builder(
-        {
-            "from": tmp_path,
-            "entrypoint": "whatever",
-            "requirement": [],
-        },
-        config,
-    )
-
-    with patch("charmcraft.commands.build.polite_exec") as mock:
-        builder.handle_dependencies()
-
-    mock.assert_not_called()
-
-
-def test_build_dependencies_virtualenv_error_basicpip(tmp_path, config):
-    """Process is properly interrupted if using pip fails."""
-    metadata = tmp_path / CHARM_METADATA
-    metadata.write_text("name: crazycharm")
-    build_dir = tmp_path / BUILD_DIRNAME
-    build_dir.mkdir()
-
-    builder = Builder(
-        {
-            "from": tmp_path,
-            "entrypoint": "whatever",
-            "requirement": ["something"],
-        },
-        config,
-    )
-
-    with patch("charmcraft.commands.build.subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 1
-        with patch("charmcraft.commands.build.polite_exec") as mock:
-            mock.return_value = -7
-            with pytest.raises(CommandError, match="problems using pip"):
-                builder.handle_dependencies()
-
-
-def test_build_dependencies_virtualenv_error_installing(tmp_path, config):
-    """Process is properly interrupted if virtualenv creation fails."""
-    metadata = tmp_path / CHARM_METADATA
-    metadata.write_text("name: crazycharm")
-    build_dir = tmp_path / BUILD_DIRNAME
-    build_dir.mkdir()
-
-    builder = Builder(
-        {
-            "from": tmp_path,
-            "entrypoint": "whatever",
-            "requirement": ["something"],
-        },
-        config,
-    )
-
-    with patch("charmcraft.commands.build.subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 1
-        with patch("charmcraft.commands.build.polite_exec") as mock:
-            mock.side_effect = [0, -7]
-            with pytest.raises(CommandError, match="problems installing dependencies"):
-                builder.handle_dependencies()
-
-
 def test_build_package_tree_structure(tmp_path, monkeypatch, config):
     """The zip file is properly built internally."""
     # the metadata
@@ -2020,7 +1758,7 @@ def test_build_package_tree_structure(tmp_path, monkeypatch, config):
         },
         config,
     )
-    zipname = builder.handle_package()
+    zipname = builder.handle_package(to_be_zipped_dir)
 
     # check the stuff outside is not in the zip, the stuff inside is zipped (with
     # contents!), and all relative to build dir
@@ -2057,7 +1795,7 @@ def test_build_package_name(tmp_path, monkeypatch, config):
         },
         config,
     )
-    zipname = builder.handle_package()
+    zipname = builder.handle_package(to_be_zipped_dir)
 
     assert zipname == "name-from-metadata.charm"
 
