@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 # Some constants that are used through the code.
 BUILD_DIRNAME = "build"
-WORK_DIRNAME = "work_dir"
+WORK_DIRNAME = ".work_dir"
 VENV_DIRNAME = "venv"
 
 # The file name and template for the dispatch script

@@ -188,7 +188,8 @@ class BundlePlugin(plugins.Plugin):
         """Return a list of commands to run during the build step."""
         install_dir = self._part_info.part_install_dir
         commands = [
-            'cp --archive --link --no-dereference . "{}"'.format(install_dir)
+            'mkdir -p "{}"'.format(install_dir),
+            'cp --archive --link --no-dereference * "{}"'.format(install_dir),
         ]
         return commands
 

@@ -17,12 +17,15 @@
 """Infrastructure for the 'pack' command."""
 
 import logging
+import os
+import pathlib
 import zipfile
 from argparse import Namespace
 
 from charmcraft.cmdbase import BaseCommand, CommandError
 from charmcraft.commands import build
 from charmcraft.manifest import create_manifest
+from charmcraft.parts import PartsError, PartsLifecycle, Step
 from charmcraft.utils import SingleOptionEnsurer, load_yaml, useful_filepath
 
 logger = logging.getLogger(__name__)
@@ -31,11 +34,14 @@ logger = logging.getLogger(__name__)
 MANDATORY_FILES = {"bundle.yaml", "manifest.yaml", "README.md"}
 
 
-def build_zip(zippath, basedir, fpaths):
+def build_zip(zippath, prime_dir):
     """Build the final file."""
     zipfh = zipfile.ZipFile(zippath, "w", zipfile.ZIP_DEFLATED)
-    for fpath in fpaths:
-        zipfh.write(fpath, fpath.relative_to(basedir))
+    for dirpath, dirnames, filenames in os.walk(prime_dir, followlinks=True):
+        dirpath = pathlib.Path(dirpath)
+        for filename in filenames:
+            filepath = dirpath / filename
+            zipfh.write(str(filepath), str(filepath.relative_to(prime_dir)))
     zipfh.close()
 
 
@@ -51,13 +57,13 @@ def get_paths_to_include(config):
             raise CommandError("Missing mandatory file: {!r}.".format(str(fpath)))
         allpaths.add(fpath)
 
-    # the extra files (relative paths)
-    bundle = config.parts.get("bundle")
-    if bundle is not None:
-        for spec in bundle["prime"]:
-            fpaths = sorted(fpath for fpath in dirpath.glob(spec) if fpath.is_file())
-            logger.debug("Including per prime config %r: %s.", spec, fpaths)
-            allpaths.update(fpaths)
+#    # the extra files (relative paths)
+#    bundle = config.parts.get("bundle")
+#    if bundle is not None:
+#        for spec in bundle["prime"]:
+#            fpaths = sorted(fpath for fpath in dirpath.glob(spec) if fpath.is_file())
+#            logger.debug("Including per prime config %r: %s.", spec, fpaths)
+#            allpaths.update(fpaths)
 
     return sorted(allpaths)
 
@@ -195,23 +201,29 @@ class PackCommand(BaseCommand):
         project = self.config.project
         manifest_filepath = create_manifest(project.dirpath, project.started_at, None)
 
-#        # set source for buiding
-#        self._charm_part["source"] = str(self.buildpath)
-#
-#        try:
-#            lifecycle = PartsLifecycle(
-#                self._parts,
-#                work_dir=build.WORK_DIRNAME,
-#                venv_dir=build.VENV_DIRNAME,
-#            )
-#            lifecycle.run(Step.PRIME)
-#        except PartsError as err:
-#            raise CommandError(err)
+        _parts = self.config.parts.copy()
+        _bundle_part = _parts.setdefault("bundle", {})
+        _prime = _bundle_part.setdefault("prime", [])
+
+        for entry in get_paths_to_include(self.config):
+            _prime.append(str(entry.relative_to(project.dirpath)))
+
+        # set source for buiding
+        _bundle_part["source"] = str(project.dirpath)
 
         try:
-            paths = get_paths_to_include(self.config)
+            lifecycle = PartsLifecycle(
+                _parts,
+                work_dir=build.WORK_DIRNAME,
+                venv_dir=build.VENV_DIRNAME,
+            )
+            lifecycle.run(Step.PRIME)
+        except PartsError as err:
+            raise CommandError(err)
+
+        try:
             zipname = project.dirpath / (bundle_name + ".zip")
-            build_zip(zipname, project.dirpath, paths)
+            build_zip(zipname, lifecycle.prime_dir)
         finally:
             manifest_filepath.unlink()
 
