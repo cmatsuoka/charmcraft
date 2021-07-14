@@ -40,6 +40,11 @@ noargs = Namespace(
 
 
 @pytest.fixture
+def config(bundle_config):
+    return bundle_config
+
+
+@pytest.fixture
 def bundle_yaml(tmp_path):
     """Create an empty bundle.yaml, with the option to set values to it."""
     bundle_path = tmp_path / "bundle.yaml"

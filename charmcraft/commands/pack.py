@@ -54,7 +54,7 @@ def get_paths_to_include(config):
     # the extra files (relative paths)
     bundle = config.parts.get("bundle")
     if bundle is not None:
-        for spec in bundle.prime:
+        for spec in bundle["prime"]:
             fpaths = sorted(fpath for fpath in dirpath.glob(spec) if fpath.is_file())
             logger.debug("Including per prime config %r: %s.", spec, fpaths)
             allpaths.update(fpaths)
@@ -194,10 +194,25 @@ class PackCommand(BaseCommand):
         # pack everything
         project = self.config.project
         manifest_filepath = create_manifest(project.dirpath, project.started_at, None)
+
+#        # set source for buiding
+#        self._charm_part["source"] = str(self.buildpath)
+#
+#        try:
+#            lifecycle = PartsLifecycle(
+#                self._parts,
+#                work_dir=build.WORK_DIRNAME,
+#                venv_dir=build.VENV_DIRNAME,
+#            )
+#            lifecycle.run(Step.PRIME)
+#        except PartsError as err:
+#            raise CommandError(err)
+
         try:
             paths = get_paths_to_include(self.config)
             zipname = project.dirpath / (bundle_name + ".zip")
             build_zip(zipname, project.dirpath, paths)
         finally:
             manifest_filepath.unlink()
+
         logger.info("Created %r.", str(zipname))

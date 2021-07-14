@@ -141,8 +141,60 @@ class CharmPlugin(plugins.Plugin):
         return commands
 
 
+class BundlePluginProperties(plugins.PluginProperties, plugins.PluginModel):
+    """Properties used to pack bundles."""
+
+    source: str = ""
+
+    @classmethod
+    def unmarshal(cls, data: Dict[str, Any]):
+        """Populate bundle properties from the part specification.
+
+        :param data: A dictionary containing part properties.
+
+        :return: The populated plugin properties data object.
+
+        :raise pydantic.ValidationError: If validation fails.
+        """
+        plugin_data = plugins.extract_plugin_properties(
+            data, plugin_name="bundle", required=["source"]
+        )
+        return cls(**plugin_data)
+
+
+class BundlePlugin(plugins.Plugin):
+    """Prepare a bundle for packing.
+
+    Extra files to be included in the bundle payload must be listed under
+    the ``prime`` file filter.
+    """
+
+    properties_class = BundlePluginProperties
+
+    @classmethod
+    def get_build_snaps(cls) -> Set[str]:
+        """Return a set of required snaps to install in the build environment."""
+        return set()
+
+    def get_build_packages(self) -> Set[str]:
+        """Return a set of required packages to install in the build environment."""
+        return {}
+
+    def get_build_environment(self) -> Dict[str, str]:
+        """Return a dictionary with the environment to use in the build step."""
+        return {}
+
+    def get_build_commands(self) -> List[str]:
+        """Return a list of commands to run during the build step."""
+        install_dir = self._part_info.part_install_dir
+        commands = [
+            'cp --archive --link --no-dereference . "{}"'.format(install_dir)
+        ]
+        return commands
+
+
 def setup_parts():
-    plugins.register({"charm": CharmPlugin})
+    plugins.register({"charm": CharmPlugin, "bundle": BundlePlugin})
 
 
 def validate_part(data: Dict[str, Any]) -> None:
