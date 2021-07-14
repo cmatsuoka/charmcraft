@@ -71,9 +71,9 @@ HOOKS_DIR = "hooks"
 
 CHARM_FILES = [
     "metadata.yaml",
+    "manifest.yaml",
     DISPATCH_FILENAME,
     HOOKS_DIR,
-    VENV_DIRNAME,
 ]
 
 CHARM_OPTIONAL = [
@@ -83,6 +83,9 @@ CHARM_OPTIONAL = [
     "lxd-profile.yaml",
     "templates",
     "version",
+    "lib",
+    "mod",
+    VENV_DIRNAME,
 ]
 
 
@@ -165,23 +168,16 @@ class Builder:
 
         create_manifest(self.buildpath, self.config.project.started_at, bases_config)
 
-        # handle entrypoint and include file or directory
-        self._charm_part.setdefault("charm-entrypoint", "src/charm.py")
-        if self.entrypoint:
-            self._charm_part["charm-entrypoint"] = str(self.entrypoint.relative_to(self.charmdir))
-
         linked_entrypoint = self.handle_generic_paths()
         self.handle_dispatcher(linked_entrypoint)
+        self.handle_dependencies()
 
+        # handle entrypoint and include file or directory
         entrypoint = linked_entrypoint.relative_to(self.buildpath)
         if str(entrypoint) == entrypoint.name:
             self._prime.append(str(entrypoint))
         else:
             self._prime.append(str(entrypoint.parents[0]))
-
-        # handle dependencies
-        if self.requirement_paths:
-            self._charm_part["charm-requirements"] = [str(p) for p in self.requirement_paths]
 
         # include optional charm files
         self._prime.extend(CHARM_FILES)
@@ -429,6 +425,10 @@ class Builder:
                     logger.debug("Ignoring file because of type: %r", str(rel_path))
 
         # the linked entrypoint is calculated here because it's when it's really in the build dir
+        self._charm_part.setdefault("charm-entrypoint", "src/charm.py")
+        if self.entrypoint:
+            self._charm_part["charm-entrypoint"] = str(self.entrypoint.relative_to(self.charmdir))
+
         linked_entrypoint = self.buildpath / self._charm_part["charm-entrypoint"]
 
         return linked_entrypoint
@@ -473,6 +473,19 @@ class Builder:
             if not dest_hook.exists():
                 relative_link = relativise(dest_hook, dispatch_path)
                 dest_hook.symlink_to(relative_link)
+
+    def handle_dependencies(self):
+        """Handle from-directory and virtualenv dependencies."""
+        self._charm_part.setdefault("charm-requirements", [])
+
+        if self.requirement_paths:
+            self._charm_part["charm-requirements"] = [str(p) for p in self.requirement_paths]
+
+        # if no requirements specified in cli and no requirements in parts,
+        # use existing file, if any
+        req_file = self.buildpath / "requirements.txt"
+        if not self._charm_part["charm-requirements"] and os.access(str(req_file), os.R_OK):
+            self._charm_part["charm-requirements"] = [req_file.name]
 
     def handle_package(
         self,

@@ -14,7 +14,7 @@
 #
 # For further info, check https://github.com/canonical/charmcraft
 
-"""Craft-parts setup and plugins."""
+"""Craft-parts setup, lifecycle and plugins."""
 
 import logging
 import pathlib
@@ -36,7 +36,7 @@ class CharmPluginProperties(plugins.PluginProperties, plugins.PluginModel):
 
     source: str = ""
     charm_entrypoint: str = "src/charm.py"
-    charm_requirements: List[str] = ["requirements.txt"]
+    charm_requirements: List[str] = []
     charm_python_packages: List[str] = []
     charm_allow_pip_binary: bool = False
 
