@@ -188,7 +188,7 @@ class PartsLifecycle:
                 {"parts": all_parts},
                 application_name="charmcraft",
                 cache_dir=cache_dir,
-                work_dir=work_dir
+                # work_dir=work_dir
             )
             #self._lcm.refresh_packages_list()
         except PartsError as err:

@@ -63,9 +63,9 @@ def create_manifest(
         content["bases"] = bases
 
     filepath = basedir / "manifest.yaml"
-    if filepath.exists():
-        raise CommandError(
-            "Cannot write the manifest as there is already a 'manifest.yaml' in disk."
-        )
+    #if filepath.exists():
+    #    raise CommandError(
+    #        "Cannot write the manifest as there is already a 'manifest.yaml' in disk."
+    #    )
     filepath.write_text(yaml.dump(content))
     return filepath
