@@ -16,16 +16,20 @@
 
 """Infrastructure for the 'build' command."""
 
-import errno
 import logging
 import os
 import pathlib
-import shutil
 import subprocess
 import zipfile
 from typing import List, Optional
 
 from charmcraft.bases import check_if_base_matches_host
+from charmcraft.charm_builder import (
+    DISPATCH_FILENAME,
+    HOOKS_DIR,
+    VENV_DIRNAME,
+    WORK_DIRNAME,
+)
 from charmcraft.cmdbase import BaseCommand, CommandError
 from charmcraft.config import Base, BasesConfiguration, Config
 from charmcraft.deprecations import notify_deprecation
@@ -34,7 +38,6 @@ from charmcraft.env import (
     get_managed_environment_project_path,
     is_charmcraft_running_in_managed_mode,
 )
-from charmcraft.jujuignore import JujuIgnore, default_juju_ignore
 from charmcraft.logsetup import message_handler
 from charmcraft.manifest import create_manifest
 from charmcraft.metadata import parse_metadata_yaml
@@ -45,33 +48,9 @@ from charmcraft.providers import (
     is_base_providable,
     launched_environment,
 )
-from charmcraft.utils import make_executable
-
-logger = logging.getLogger(__name__)
-
-# Some constants that are used through the code.
-BUILD_DIRNAME = "build"
-WORK_DIRNAME = "work_dir"
-VENV_DIRNAME = "venv"
-
-# The file name and template for the dispatch script
-DISPATCH_FILENAME = "dispatch"
-# If Juju doesn't support the dispatch mechanism, it will execute the
-# hook, and we'd need sys.argv[0] to be the name of the hook but it's
-# geting lost by calling this dispatch, so we fake JUJU_DISPATCH_PATH
-# to be the value it would've otherwise been.
-DISPATCH_CONTENT = """#!/bin/sh
-
-JUJU_DISPATCH_PATH="${{JUJU_DISPATCH_PATH:-$0}}" PYTHONPATH=lib:venv ./{entrypoint_relative_path}
-"""
-
-# The minimum set of hooks to be provided for compatibility with old Juju
-MANDATORY_HOOK_NAMES = {"install", "start", "upgrade-charm"}
-HOOKS_DIR = "hooks"
 
 CHARM_FILES = [
     "metadata.yaml",
-    "manifest.yaml",
     DISPATCH_FILENAME,
     HOOKS_DIR,
 ]
@@ -87,6 +66,8 @@ CHARM_OPTIONAL = [
     "mod",
     VENV_DIRNAME,
 ]
+
+logger = logging.getLogger(__name__)
 
 
 def _format_run_on_base(base: Base) -> str:
@@ -144,14 +125,15 @@ class Builder:
         self.entrypoint = args["entrypoint"]
         self.requirement_paths = args["requirement"]
 
-        self.buildpath = self.charmdir / BUILD_DIRNAME
-        self.ignore_rules = self._load_juju_ignore()
+        # self.buildpath = self.charmdir / BUILD_DIRNAME
         self.config = config
         self.metadata = parse_metadata_yaml(self.charmdir)
 
         self._parts = self.config.parts.copy()
         self._charm_part = self._parts.setdefault("charm", {})
         self._prime = self._charm_part.setdefault("prime", [])
+        self._charm_part.setdefault("charm-entrypoint", "src/charm.py")
+        self._charm_part.setdefault("charm-requirements", ["requirements.txt"])
 
     def build_charm(self, bases_config: BasesConfiguration) -> str:
         """Build the charm.
@@ -160,45 +142,43 @@ class Builder:
 
         :returns: File name of charm.
         """
-        logger.debug("Building charm in %r", str(self.buildpath))
+        logger.debug("Building charm in %r", str(self.charmdir))
 
-        if self.buildpath.exists():
-            shutil.rmtree(str(self.buildpath))
-        self.buildpath.mkdir()
+        # Add default charm files to prime list.
+        self._prime.extend(CHARM_FILES)
+        for fn in CHARM_OPTIONAL:
+            path = self.charmdir / fn
+            if path.exists():
+                self._prime.append(fn)
 
-        create_manifest(self.buildpath, self.config.project.started_at, bases_config)
+        # If there's an entrypoint argument, use it.
+        if self.entrypoint:
+            self._charm_part["charm-entrypoint"] = self.entrypoint
 
-        linked_entrypoint = self.handle_generic_paths()
-        self.handle_dispatcher(linked_entrypoint)
-        self.handle_dependencies()
-
-        # handle entrypoint and include file or directory
-        entrypoint = linked_entrypoint.relative_to(self.buildpath)
+        # Add entrypoint or its parent dir to prime list.
+        entrypoint = pathlib.Path(self._charm_part["charm-entrypoint"])
         if str(entrypoint) == entrypoint.name:
             self._prime.append(str(entrypoint))
         else:
             self._prime.append(str(entrypoint.parents[0]))
 
-        # include optional charm files
-        self._prime.extend(CHARM_FILES)
-        for fn in CHARM_OPTIONAL:
-            path = self.buildpath / fn
-            if path.exists():
-                self._prime.append(fn)
+        # If there's a requirement argument, use it.
+        if self.requirement_paths:
+            requirements = [str(p) for p in self.requirement_paths.relative_to(self.charmdir)]
+            self._charm_part["charm-requirements"] = requirements
 
-        # set source for buiding
-        self._charm_part["source"] = str(self.buildpath)
+        # Set the part source directory.
+        self._charm_part["source"] = str(self.charmdir)
 
+        # Run the parts lifecycle.
         try:
-            lifecycle = PartsLifecycle(
-                self._parts,
-                work_dir=WORK_DIRNAME,
-                venv_dir=VENV_DIRNAME,
-            )
+            lifecycle = PartsLifecycle(self._parts, work_dir=WORK_DIRNAME)
             lifecycle.run(Step.PRIME)
         except PartsError as err:
             raise CommandError(err)
 
+        # Create manifest and zip the payload.
+        create_manifest(lifecycle.prime_dir, self.config.project.started_at, bases_config)
         zipname = self.handle_package(lifecycle.prime_dir, bases_config)
 
         logger.info("Created '%s'.", zipname)
@@ -337,144 +317,7 @@ class Builder:
 
         return charm_name
 
-    def _load_juju_ignore(self):
-        ignore = JujuIgnore(default_juju_ignore)
-        path = self.charmdir / ".jujuignore"
-        if path.exists():
-            with path.open("r", encoding="utf-8") as ignores:
-                ignore.extend_patterns(ignores)
-        return ignore
-
-    def create_symlink(self, src_path, dest_path):
-        """Create a symlink in dest_path pointing relatively like src_path.
-
-        It also verifies that the linked dir or file is inside the project.
-        """
-        resolved_path = src_path.resolve()
-        if self.charmdir in resolved_path.parents:
-            relative_link = relativise(src_path, resolved_path)
-            dest_path.symlink_to(relative_link)
-        else:
-            rel_path = src_path.relative_to(self.charmdir)
-            logger.warning(
-                "Ignoring symlink because targets outside the project: %r",
-                str(rel_path),
-            )
-
-    def handle_generic_paths(self):
-        """Handle all files and dirs except what's ignored and what will be handled later.
-
-        Works differently for the different file types:
-        - regular files: hard links
-        - directories: created
-        - symlinks: respected if are internal to the project
-        - other types (blocks, mount points, etc): ignored
-        """
-        logger.debug("Linking in generic paths")
-
-        for basedir, dirnames, filenames in os.walk(
-            str(self.charmdir), followlinks=False
-        ):
-            abs_basedir = pathlib.Path(basedir)
-            rel_basedir = abs_basedir.relative_to(self.charmdir)
-
-            # process the directories
-            ignored = []
-            for pos, name in enumerate(dirnames):
-                rel_path = rel_basedir / name
-                abs_path = abs_basedir / name
-
-                if self.ignore_rules.match(str(rel_path), is_dir=True):
-                    logger.debug(
-                        "Ignoring directory because of rules: %r", str(rel_path)
-                    )
-                    ignored.append(pos)
-                elif abs_path.is_symlink():
-                    dest_path = self.buildpath / rel_path
-                    self.create_symlink(abs_path, dest_path)
-                else:
-                    dest_path = self.buildpath / rel_path
-                    dest_path.mkdir(mode=abs_path.stat().st_mode)
-
-            # in the future don't go inside ignored directories
-            for pos in reversed(ignored):
-                del dirnames[pos]
-
-            # process the files
-            for name in filenames:
-                rel_path = rel_basedir / name
-                abs_path = abs_basedir / name
-
-                if self.ignore_rules.match(str(rel_path), is_dir=False):
-                    logger.debug("Ignoring file because of rules: %r", str(rel_path))
-                elif abs_path.is_symlink():
-                    dest_path = self.buildpath / rel_path
-                    self.create_symlink(abs_path, dest_path)
-                elif abs_path.is_file():
-                    dest_path = self.buildpath / rel_path
-                    try:
-                        os.link(str(abs_path), str(dest_path))
-                    except PermissionError:
-                        # when not allowed to create hard links
-                        shutil.copy2(str(abs_path), str(dest_path))
-                    except OSError as e:
-                        if e.errno != errno.EXDEV:
-                            raise
-                        shutil.copy2(str(abs_path), str(dest_path))
-                else:
-                    logger.debug("Ignoring file because of type: %r", str(rel_path))
-
-        # the linked entrypoint is calculated here because it's when it's really in the build dir
-        self._charm_part.setdefault("charm-entrypoint", "src/charm.py")
-        if self.entrypoint:
-            self._charm_part["charm-entrypoint"] = str(self.entrypoint.relative_to(self.charmdir))
-
-        linked_entrypoint = self.buildpath / self._charm_part["charm-entrypoint"]
-
-        return linked_entrypoint
-
-    def handle_dispatcher(self, linked_entrypoint):
-        """Handle modern and classic dispatch mechanisms."""
-        # dispatch mechanism, create one if wasn't provided by the project
-        dispatch_path = self.buildpath / DISPATCH_FILENAME
-        if not dispatch_path.exists():
-            logger.debug("Creating the dispatch mechanism")
-            dispatch_content = DISPATCH_CONTENT.format(
-                entrypoint_relative_path=linked_entrypoint.relative_to(self.buildpath)
-            )
-            with dispatch_path.open("wt", encoding="utf8") as fh:
-                fh.write(dispatch_content)
-                make_executable(fh)
-
-        # bunch of symlinks, to support old juju: verify that any of the already included hooks
-        # in the directory is not linking directly to the entrypoint, and also check all the
-        # mandatory ones are present
-        dest_hookpath = self.buildpath / HOOKS_DIR
-        if not dest_hookpath.exists():
-            dest_hookpath.mkdir()
-
-        # get those built hooks that we need to replace because they are pointing to the
-        # entrypoint directly and we need to fix the environment in the middle
-        current_hooks_to_replace = []
-        for node in dest_hookpath.iterdir():
-            if node.resolve() == linked_entrypoint:
-                current_hooks_to_replace.append(node)
-                node.unlink()
-                logger.debug(
-                    "Replacing existing hook %r as it's a symlink to the entrypoint",
-                    node.name,
-                )
-
-        # include the mandatory ones and those we need to replace
-        hooknames = MANDATORY_HOOK_NAMES | {x.name for x in current_hooks_to_replace}
-        for hookname in hooknames:
-            logger.debug("Creating the %r hook script pointing to dispatch", hookname)
-            dest_hook = dest_hookpath / hookname
-            if not dest_hook.exists():
-                relative_link = relativise(dest_hook, dispatch_path)
-                dest_hook.symlink_to(relative_link)
-
-    def handle_dependencies(self):
+    def xxx_handle_dependencies(self):
         """Handle from-directory and virtualenv dependencies."""
         self._charm_part.setdefault("charm-requirements", [])
 

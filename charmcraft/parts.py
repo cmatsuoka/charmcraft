@@ -17,8 +17,10 @@
 """Craft-parts setup, lifecycle and plugins."""
 
 import logging
+import os
 import pathlib
 import shlex
+import sys
 from typing import Any, Dict, List, Set, cast
 
 from craft_parts import LifecycleManager, Step, plugins
@@ -26,6 +28,7 @@ from craft_parts.parts import PartSpec
 from craft_parts.errors import PartsError
 from xdg import BaseDirectory  # type: ignore
 
+from charmcraft import charm_builder
 from charmcraft.cmdbase import CommandError
 
 logger = logging.getLogger(__name__)
@@ -34,8 +37,7 @@ logger = logging.getLogger(__name__)
 class CharmPluginProperties(plugins.PluginProperties, plugins.PluginModel):
     """Properties used in charm building."""
 
-    source: str = ""
-    charm_entrypoint: str = "src/charm.py"
+    charm_entrypoint: str = ""
     charm_requirements: List[str] = []
     charm_python_packages: List[str] = []
     charm_allow_pip_binary: bool = False
@@ -50,9 +52,7 @@ class CharmPluginProperties(plugins.PluginProperties, plugins.PluginModel):
 
         :raise pydantic.ValidationError: If validation fails.
         """
-        plugin_data = plugins.extract_plugin_properties(
-            data, plugin_name="charm", required=["source"]
-        )
+        plugin_data = plugins.extract_plugin_properties(data, plugin_name="charm")
         return cls(**plugin_data)
 
 
@@ -103,7 +103,7 @@ class CharmPlugin(plugins.Plugin):
 
     def get_build_environment(self) -> Dict[str, str]:
         """Return a dictionary with the environment to use in the build step."""
-        venv_dir = self._part_info.part_install_dir / self._part_info.venv_dir
+        venv_dir = self._part_info.part_install_dir / charm_builder.VENV_DIRNAME
         return {
             # Add PATH to the python interpreter we always intend to use with
             # this plugin. It can be user overridden, but that is an explicit
@@ -113,7 +113,7 @@ class CharmPlugin(plugins.Plugin):
 
     def get_build_commands(self) -> List[str]:
         """Return a list of commands to run during the build step."""
-        venv_dir = self._part_info.part_install_dir / self._part_info.venv_dir
+        venv_dir = self._part_info.part_install_dir / charm_builder.VENV_DIRNAME
         pip_install_cmd = f"pip install --target={venv_dir}"
         options = cast(CharmPluginProperties, self._options)
         commands = []
@@ -133,10 +133,20 @@ class CharmPlugin(plugins.Plugin):
             requirements_cmd = f"{pip_install_cmd} {requirements}"
             commands.append(requirements_cmd)
 
-        install_dir = self._part_info.part_install_dir
-        commands.append(
-            'cp --archive --link --no-dereference . "{}"'.format(install_dir)
-        )
+        build_cmd = [
+            sys.executable,
+            "-mcharmcraft.charm_builder",
+            #os.path.abspath(charm_builder.__file__),
+            "--charmdir",
+            str(self._part_info.part_src_dir),
+            "--builddir",
+            str(self._part_info.part_install_dir),
+        ]
+
+        if options.charm_entrypoint:
+            build_cmd.extend(["--entrypoint", options.charm_entrypoint])
+
+        commands.append(" ".join(shlex.quote(i) for i in build_cmd))
 
         return commands
 
@@ -151,12 +161,12 @@ def validate_part(data: Dict[str, Any]) -> None:
     :param data: The part data to validate.
     """
     if not isinstance(data, dict):
-        raise TypeError(f"value must be a dictionary")
+        raise TypeError("value must be a dictionary")
 
     spec = data.copy()
     plugin_name = spec.get("plugin", "")
     if not plugin_name:
-        raise ValueError(f"'plugin' not defined")
+        raise ValueError("'plugin' not defined")
 
     plugin_class = plugins.get_plugin_class(plugin_name)
 
@@ -169,13 +179,7 @@ def validate_part(data: Dict[str, Any]) -> None:
 
 
 class PartsLifecycle:
-    def __init__(
-        self,
-        all_parts: Dict[str, Any],
-        *,
-        work_dir: pathlib.Path,
-        venv_dir: pathlib.Path,
-    ):
+    def __init__(self, all_parts: Dict[str, Any], *, work_dir: pathlib.Path):
         # set the cache dir for parts package management
         cache_dir = BaseDirectory.save_cache_path("charmcraft")
 
@@ -183,11 +187,10 @@ class PartsLifecycle:
             self._lcm = LifecycleManager(
                 {"parts": all_parts},
                 application_name="charmcraft",
-                work_dir=work_dir,
                 cache_dir=cache_dir,
-                venv_dir=venv_dir,
+                work_dir=work_dir
             )
-            self._lcm.refresh_packages_list()
+            #self._lcm.refresh_packages_list()
         except PartsError as err:
             raise CommandError(err)
 
