@@ -103,20 +103,28 @@ class CharmPlugin(plugins.Plugin):
 
     def get_build_environment(self) -> Dict[str, str]:
         """Return a dictionary with the environment to use in the build step."""
-        venv_dir = self._part_info.part_install_dir / charm_builder.VENV_DIRNAME
-        return {
-            # Add PATH to the python interpreter we always intend to use with
-            # this plugin. It can be user overridden, but that is an explicit
-            # choice made by a user.
-            "PATH": "{}/bin:${{PATH}}".format(str(venv_dir)),
-        }
+        return {}
 
     def get_build_commands(self) -> List[str]:
         """Return a list of commands to run during the build step."""
         venv_dir = self._part_info.part_install_dir / charm_builder.VENV_DIRNAME
         pip_install_cmd = f"pip install --target={venv_dir}"
         options = cast(CharmPluginProperties, self._options)
-        commands = []
+
+        build_cmd = [
+            sys.executable,
+            "-mcharmcraft.charm_builder",
+            #os.path.abspath(charm_builder.__file__),
+            "--charmdir",
+            str(self._part_info.part_build_dir),
+            "--builddir",
+            str(self._part_info.part_install_dir),
+        ]
+
+        if options.charm_entrypoint:
+            build_cmd.extend(["--entrypoint", options.charm_entrypoint])
+
+        commands = [" ".join([shlex.quote(i) for i in build_cmd])]
 
         if not options.charm_allow_pip_binary:
             pip_install_cmd += " --no-binary :all:"
@@ -132,21 +140,6 @@ class CharmPlugin(plugins.Plugin):
             requirements = " ".join(f"-r {r!r}" for r in options.charm_requirements)
             requirements_cmd = f"{pip_install_cmd} {requirements}"
             commands.append(requirements_cmd)
-
-        build_cmd = [
-            sys.executable,
-            "-mcharmcraft.charm_builder",
-            #os.path.abspath(charm_builder.__file__),
-            "--charmdir",
-            str(self._part_info.part_src_dir),
-            "--builddir",
-            str(self._part_info.part_install_dir),
-        ]
-
-        if options.charm_entrypoint:
-            build_cmd.extend(["--entrypoint", options.charm_entrypoint])
-
-        commands.append(" ".join(shlex.quote(i) for i in build_cmd))
 
         return commands
 

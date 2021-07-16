@@ -148,8 +148,7 @@ class Builder:
         self._prime.extend(CHARM_FILES)
         for fn in CHARM_OPTIONAL:
             path = self.charmdir / fn
-            if path.exists():
-                self._prime.append(fn)
+            self._prime.append(":" + fn)
 
         # If there's an entrypoint argument, use it.
         if self.entrypoint:

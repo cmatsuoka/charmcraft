@@ -109,7 +109,6 @@ class CharmBuilder:
         """
         logger.debug("Linking in generic paths")
 
-        
         for basedir, dirnames, filenames in os.walk(
             str(self.charmdir), followlinks=False
         ):
@@ -122,9 +121,7 @@ class CharmBuilder:
                 rel_path = rel_basedir / name
                 abs_path = abs_basedir / name
 
-                if rel_path.parts[0] == WORK_DIRNAME:
-                    ignored.append(pos)
-                elif self.ignore_rules.match(str(rel_path), is_dir=True):
+                if self.ignore_rules.match(str(rel_path), is_dir=True):
                     logger.debug(
                         "Ignoring directory because of rules: %r", str(rel_path)
                     )
@@ -145,9 +142,7 @@ class CharmBuilder:
                 rel_path = rel_basedir / name
                 abs_path = abs_basedir / name
 
-                if rel_path.parts[0] == WORK_DIRNAME:
-                    ignored.append(pos)
-                elif self.ignore_rules.match(str(rel_path), is_dir=False):
+                if self.ignore_rules.match(str(rel_path), is_dir=False):
                     logger.debug("Ignoring file because of rules: %r", str(rel_path))
                 elif abs_path.is_symlink():
                     dest_path = self.buildpath / rel_path
