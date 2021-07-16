@@ -52,6 +52,7 @@ from charmcraft.providers import (
 CHARM_FILES = [
     "metadata.yaml",
     DISPATCH_FILENAME,
+    VENV_DIRNAME,
     HOOKS_DIR,
 ]
 
@@ -64,7 +65,6 @@ CHARM_OPTIONAL = [
     "version",
     "lib",
     "mod",
-    VENV_DIRNAME,
 ]
 
 logger = logging.getLogger(__name__)
@@ -148,7 +148,8 @@ class Builder:
         self._prime.extend(CHARM_FILES)
         for fn in CHARM_OPTIONAL:
             path = self.charmdir / fn
-            self._prime.append(":" + fn)
+            if path.exists():
+                self._prime.append(fn)
 
         # If there's an entrypoint argument, use it.
         if self.entrypoint:

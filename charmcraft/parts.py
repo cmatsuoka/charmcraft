@@ -110,6 +110,7 @@ class CharmPlugin(plugins.Plugin):
         venv_dir = self._part_info.part_install_dir / charm_builder.VENV_DIRNAME
         pip_install_cmd = f"pip install --target={venv_dir}"
         options = cast(CharmPluginProperties, self._options)
+        commands = [f'mkdir -p "{venv_dir}"']
 
         build_cmd = [
             sys.executable,
@@ -124,7 +125,7 @@ class CharmPlugin(plugins.Plugin):
         if options.charm_entrypoint:
             build_cmd.extend(["--entrypoint", options.charm_entrypoint])
 
-        commands = [" ".join([shlex.quote(i) for i in build_cmd])]
+        commands.append(" ".join([shlex.quote(i) for i in build_cmd]))
 
         if not options.charm_allow_pip_binary:
             pip_install_cmd += " --no-binary :all:"
