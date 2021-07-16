@@ -103,32 +103,44 @@ class CharmPlugin(plugins.Plugin):
 
     def get_build_environment(self) -> Dict[str, str]:
         """Return a dictionary with the environment to use in the build step."""
-        return {}
+        venv_dir = self._part_info.part_build_dir / charm_builder.VENV_DIRNAME
+        return {
+            "PATH": f"{venv_dir}/bin:${{PATH}}"
+        }
 
     def get_build_commands(self) -> List[str]:
         """Return a list of commands to run during the build step."""
         venv_dir = self._part_info.part_build_dir / charm_builder.VENV_DIRNAME
-        pip_install_cmd = f"pip install --target={venv_dir}"
+        python_interpreter = sys.executable
         options = cast(CharmPluginProperties, self._options)
-        commands = [f'mkdir -p "{venv_dir}"']
 
+        # create venv so packages can be cached
+        #commands = [f'{python_interpreter} -m venv "{venv_dir}"']
+        commands = []
+
+        # install python packages
+        pkg_cmd = ["pip", "install", "--target", str(venv_dir)]
         if not options.charm_allow_pip_binary:
-            pip_install_cmd += " --no-binary :all:"
+            pkg_cmd.extend(["--no-binary", ":all:"])
 
         if options.charm_python_packages:
-            python_packages = " ".join(
-                [shlex.quote(pkg) for pkg in options.charm_python_packages]
-            )
-            python_packages_cmd = f"{pip_install_cmd} {python_packages}"
-            commands.append(python_packages_cmd)
+            for pkg in options.charm_python_packages:
+                pkg_cmd.append(pkg)
+            commands.append(" ".join([shlex.quote(i) for i in pkg_cmd]))
+
+        # install python requirements
+        req_cmd = ["pip", "install", "--target", str(venv_dir)]
+        if not options.charm_allow_pip_binary:
+            req_cmd.extend(["--no-binary", ":all:"])
 
         if options.charm_requirements:
-            requirements = " ".join(f"-r {r!r}" for r in options.charm_requirements)
-            requirements_cmd = f"{pip_install_cmd} {requirements}"
-            commands.append(requirements_cmd)
+            for req in options.charm_requirements:
+                req_cmd.extend(["-r", req])
+            commands.append(" ".join([shlex.quote(i) for i in req_cmd]))
 
+        # invoke charm builder
         build_cmd = [
-            sys.executable,
+            python_interpreter,
             "-m",
             "charmcraft.charm_builder",
             "--charmdir",
@@ -136,13 +148,16 @@ class CharmPlugin(plugins.Plugin):
             "--builddir",
             str(self._part_info.part_install_dir),
         ]
-
         if options.charm_entrypoint:
             build_cmd.extend(["--entrypoint", options.charm_entrypoint])
-
         commands.append(" ".join([shlex.quote(i) for i in build_cmd]))
 
-        commands.append(f'cp -rap "{venv_dir}" "{self._part_info.part_install_dir}"')
+        # install venv
+        install_venv_dir = self._part_info.part_install_dir / charm_builder.VENV_DIRNAME
+        commands.append(f'rm -Rf "{install_venv_dir}"')
+        #commands.append(f'mkdir -p "{install_venv_dir}"')
+        #commands.append(f'cp -rap "{venv_dir}"/lib*/*/site-packages/* "{install_venv_dir}"')
+        commands.append(f'cp -rap "{venv_dir}" "{install_venv_dir}"')
 
         return commands
 
