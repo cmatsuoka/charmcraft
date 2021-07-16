@@ -20,6 +20,7 @@ import logging
 import os
 import pathlib
 import shlex
+import site
 import sys
 from typing import Any, Dict, List, Set, cast
 
@@ -103,23 +104,23 @@ class CharmPlugin(plugins.Plugin):
 
     def get_build_environment(self) -> Dict[str, str]:
         """Return a dictionary with the environment to use in the build step."""
-        venv_dir = self._part_info.part_build_dir / charm_builder.VENV_DIRNAME
+        staging_venv_dir = self._part_info.part_build_dir / charm_builder.VENV_DIRNAME
         return {
-            "PATH": f"{venv_dir}/bin:${{PATH}}"
+            "PATH": f"{staging_venv_dir}/bin:${{PATH}}",
+            "PYTHONUSERBASE": staging_venv_dir,
         }
 
     def get_build_commands(self) -> List[str]:
         """Return a list of commands to run during the build step."""
-        venv_dir = self._part_info.part_build_dir / charm_builder.VENV_DIRNAME
+        staging_venv_dir = self._part_info.part_build_dir / charm_builder.VENV_DIRNAME
         python_interpreter = sys.executable
         options = cast(CharmPluginProperties, self._options)
 
         # create venv so packages can be cached
-        #commands = [f'{python_interpreter} -m venv "{venv_dir}"']
-        commands = []
+        commands = [f'{python_interpreter} -m venv "{staging_venv_dir}"']
 
         # install python packages
-        pkg_cmd = ["pip", "install", "--target", str(venv_dir)]
+        pkg_cmd = ["pip", "install"]
         if not options.charm_allow_pip_binary:
             pkg_cmd.extend(["--no-binary", ":all:"])
 
@@ -129,7 +130,7 @@ class CharmPlugin(plugins.Plugin):
             commands.append(" ".join([shlex.quote(i) for i in pkg_cmd]))
 
         # install python requirements
-        req_cmd = ["pip", "install", "--target", str(venv_dir)]
+        req_cmd = ["pip", "install"]
         if not options.charm_allow_pip_binary:
             req_cmd.extend(["--no-binary", ":all:"])
 
@@ -155,9 +156,9 @@ class CharmPlugin(plugins.Plugin):
         # install venv
         install_venv_dir = self._part_info.part_install_dir / charm_builder.VENV_DIRNAME
         commands.append(f'rm -Rf "{install_venv_dir}"')
-        #commands.append(f'mkdir -p "{install_venv_dir}"')
-        #commands.append(f'cp -rap "{venv_dir}"/lib*/*/site-packages/* "{install_venv_dir}"')
-        commands.append(f'cp -rap "{venv_dir}" "{install_venv_dir}"')
+        commands.append(
+            f'cp -rap "$({python_interpreter} -msite --user-site)" "{install_venv_dir}"'
+        )
 
         return commands
 
@@ -202,7 +203,7 @@ class PartsLifecycle:
                 work_dir=work_dir,
                 ignore_local_sources=["*.charm"],
             )
-            #self._lcm.refresh_packages_list()
+            # self._lcm.refresh_packages_list()
         except PartsError as err:
             raise CommandError(err)
 
