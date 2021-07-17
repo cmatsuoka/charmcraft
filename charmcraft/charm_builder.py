@@ -25,6 +25,7 @@ import shutil
 import site
 import subprocess
 import sys
+from typing import List
 
 from charmcraft.jujuignore import JujuIgnore, default_juju_ignore
 from charmcraft.utils import make_executable
@@ -60,13 +61,21 @@ def relativise(src, dst):
 class CharmBuilder:
     """The package builder."""
 
-    def __init__(self, args):
-        self.charmdir = args["from"]
-        self.entrypoint = args["entrypoint"]
-        self.buildpath = args["builddir"]
-        self.allow_pip_binary = args.get("allow-pip-binary", False)
-        self.python_packages = args.get("python-packages")
-        self.requirements = args.get("requirements")
+    def __init__(
+        self,
+        charmdir: pathlib.Path,
+        builddir: pathlib.Path,
+        entrypoint: pathlib.Path,
+        allow_pip_binary: bool,
+        python_packages: List[str],
+        requirements: List[str],
+    ):
+        self.charmdir = charmdir
+        self.buildpath = builddir
+        self.entrypoint = entrypoint
+        self.allow_pip_binary = allow_pip_binary
+        self.python_packages = python_packages
+        self.requirements = requirements
         self.ignore_rules = self._load_juju_ignore()
 
     def build_charm(self) -> None:
@@ -76,13 +85,14 @@ class CharmBuilder:
         staging_venv_dir = self.charmdir / VENV_DIRNAME
         python_interpreter = sys.executable
 
-        # create venv so packages can be cached
-        logger.debug("create staging venv in %s", staging_venv_dir)
+        # create venv so packages can be cached. note: additional packages
+        # pip and setuptools will also be installed!
+        logger.debug("create staging venv in %r", staging_venv_dir)
         subprocess.run([python_interpreter, "-m", "venv", staging_venv_dir])
 
         # install python packages
+        logger.debug("install python packages: %s", self.python_packages)
         if self.python_packages:
-            logger.debug("install python packages: %s", self.python_packages)
             pkg_cmd = ["pip", "install"]
             if not self.allow_pip_binary:
                 pkg_cmd.extend(["--no-binary", ":all:"])
@@ -91,8 +101,8 @@ class CharmBuilder:
             subprocess.run(pkg_cmd)
 
         # install python requirements
+        logger.debug("install requirements: %s", self.requirements)
         if self.requirements:
-            logger.debug("install requirements: %s", self.requirements)
             req_cmd = ["pip", "install"]
             if not self.allow_pip_binary:
                 req_cmd.extend(["--no-binary", ":all:"])
@@ -110,7 +120,7 @@ class CharmBuilder:
 
         # install user site data to charm payload venv
         install_venv_dir = self.buildpath / VENV_DIRNAME
-        logger.debug("install staged venv to %s", install_venv_dir)
+        logger.debug("install staged venv to %r", install_venv_dir)
         if install_venv_dir.exists():
             shutil.rmtree(install_venv_dir)
         shutil.copytree(site.USER_SITE, install_venv_dir)
@@ -275,14 +285,18 @@ def _parse_arguments() -> argparse.Namespace:
         help="Enable installation of binary wheels.",
     )
     parser.add_argument(
+        "-p",
         "--python-packages",
-        metavar="list",
+        metavar="pkgname",
+        action="append",
         default=None,
         help="Comma-separated list of python packages to install.",
     )
     parser.add_argument(
+        "-r",
         "--requirements",
-        metavar="list",
+        metavar="reqfile",
+        action="append",
         default=None,
         help="Comma-separated list of requirements files.",
     )
@@ -298,20 +312,14 @@ def main():
 
     logger.debug("Starting charm builder")
 
-    args = {
-        "from": pathlib.Path(options.charmdir),
-        "entrypoint": pathlib.Path(options.entrypoint),
-        "builddir": pathlib.Path(options.builddir),
-        "allow-pip-binary": options.allow_pip_binary,
-    }
-
-    if options.python_packages:
-        args["python-packages"] = options.python_packages.split(",")
-
-    if options.requirements:
-        args["requirements"] = options.requirements.split(",")
-
-    builder = CharmBuilder(args)
+    builder = CharmBuilder(
+        charmdir=pathlib.Path(options.charmdir),
+        builddir=pathlib.Path(options.builddir),
+        entrypoint=pathlib.Path(options.entrypoint),
+        allow_pip_binary=options.allow_pip_binary,
+        python_packages=options.python_packages,
+        requirements=options.requirements,
+    )
     builder.build_charm()
 
 

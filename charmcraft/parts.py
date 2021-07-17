@@ -129,11 +129,11 @@ class CharmPlugin(plugins.Plugin):
         if options.charm_allow_pip_binary:
             build_cmd.append("--allow-pip-binary")
 
-        if options.charm_python_packages:
-            build_cmd.extend(["--python-packages", ",".join(options.charm_python_packages)])
+        for pkg in options.charm_python_packages:
+            build_cmd.extend(["-p", pkg])
 
-        if options.charm_requirements:
-            build_cmd.extend(["--requirements", ",".join(options.charm_requirements)])
+        for req in options.charm_requirements:
+            build_cmd.extend(["-r", req])
 
         commands = [" ".join([shlex.quote(i) for i in build_cmd])]
 
