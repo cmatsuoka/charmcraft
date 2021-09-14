@@ -65,14 +65,12 @@ class CharmBuilder:
         charmdir: pathlib.Path,
         builddir: pathlib.Path,
         entrypoint: pathlib.Path,
-        allow_pip_binary: bool = None,
         python_packages: List[str] = None,
         requirements: List[str] = None,
     ):
         self.charmdir = charmdir
         self.buildpath = builddir
         self.entrypoint = entrypoint
-        self.allow_pip_binary = allow_pip_binary
         self.python_packages = python_packages
         self.requirement_paths = requirements
         self.ignore_rules = self._load_juju_ignore()
@@ -134,7 +132,9 @@ class CharmBuilder:
                 rel_path = rel_basedir / name
                 abs_path = abs_basedir / name
 
-                if self.ignore_rules.match(str(rel_path), is_dir=True):
+                if name == VENV_DIRNAME:
+                    ignored.append(pos)
+                elif self.ignore_rules.match(str(rel_path), is_dir=True):
                     logger.debug("Ignoring directory because of rules: %r", str(rel_path))
                     ignored.append(pos)
                 elif abs_path.is_symlink():
@@ -226,10 +226,13 @@ class CharmBuilder:
         if self.requirement_paths:
             _process_run(["pip3", "--version"])
 
-            venvpath = self.buildpath / VENV_DIRNAME
+            venvpath = self.charmdir / VENV_DIRNAME
+            venvpath.mkdir(parents=True, exist_ok=True)
             cmd = [
                 "pip3",
                 "install",  # base command
+                "--no-binary",
+                ":all:",  # do not use binary packages
                 "--target={}".format(venvpath),  # put all the resulting files in that specific dir
             ]
             if _pip_needs_system():
@@ -238,6 +241,8 @@ class CharmBuilder:
             for reqspath in self.requirement_paths:
                 cmd.append("--requirement={}".format(reqspath))  # the dependencies file(s)
             _process_run(cmd)
+
+            shutil.copytree(venvpath, self.buildpath / VENV_DIRNAME)
 
 
 def _pip_needs_system():

@@ -610,10 +610,19 @@ def test_build_dependencies_virtualenv_simple(tmp_path):
         with patch("charmcraft.charm_builder._process_run") as mock:
             builder.handle_dependencies()
 
-    envpath = build_dir / VENV_DIRNAME
+    envpath = tmp_path / VENV_DIRNAME
     assert mock.mock_calls == [
         call(["pip3", "--version"]),
-        call(["pip3", "install", "--target={}".format(envpath), "--requirement=reqs.txt"]),
+        call(
+            [
+                "pip3",
+                "install",
+                "--no-binary",
+                ":all:",
+                "--target={}".format(envpath),
+                "--requirement=reqs.txt",
+            ]
+        ),
     ]
     assert mock_run.mock_calls == [
         call(
@@ -650,13 +659,15 @@ def test_build_dependencies_needs_system(tmp_path, config):
         with patch("charmcraft.charm_builder._process_run") as mock:
             builder.handle_dependencies()
 
-    envpath = build_dir / VENV_DIRNAME
+    envpath = tmp_path / VENV_DIRNAME
     assert mock.mock_calls == [
         call(["pip3", "--version"]),
         call(
             [
                 "pip3",
                 "install",
+                "--no-binary",
+                ":all:",
                 "--target={}".format(envpath),
                 "--system",
                 "--requirement=reqs",
@@ -684,13 +695,15 @@ def test_build_dependencies_virtualenv_multiple(tmp_path):
         with patch("charmcraft.charm_builder._process_run") as mock:
             builder.handle_dependencies()
 
-    envpath = build_dir / VENV_DIRNAME
+    envpath = tmp_path / VENV_DIRNAME
     assert mock.mock_calls == [
         call(["pip3", "--version"]),
         call(
             [
                 "pip3",
                 "install",
+                "--no-binary",
+                ":all:",
                 "--target={}".format(envpath),
                 "--requirement=reqs1.txt",
                 "--requirement=reqs2.txt",
