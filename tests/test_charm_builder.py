@@ -19,6 +19,7 @@ import filecmp
 import logging
 import os
 import pathlib
+import shutil
 import socket
 import sys
 from unittest.mock import call, patch
@@ -26,7 +27,7 @@ from unittest.mock import call, patch
 import pytest
 
 from charmcraft import charm_builder
-from charmcraft.charm_builder import VENV_DIRNAME, CharmBuilder, _process_run
+from charmcraft.charm_builder import VENV_DIRNAME, REQ_DIGEST_FILENAME, CharmBuilder, _process_run
 from charmcraft.cmdbase import CommandError
 from charmcraft.commands.build import BUILD_DIRNAME, DISPATCH_CONTENT, DISPATCH_FILENAME
 from charmcraft.metadata import CHARM_METADATA
@@ -640,6 +641,49 @@ def test_build_dependencies_virtualenv_simple(tmp_path):
     ]
 
 
+def test_build_dependencies_virtualenv_skip(tmp_path, caplog):
+    """Virtualenv creation is skipped because requirements didn't change."""
+    caplog.set_level(logging.DEBUG)
+    metadata = tmp_path / CHARM_METADATA
+    metadata.write_text("name: crazycharm")
+    build_dir = tmp_path / BUILD_DIRNAME
+    build_dir.mkdir()
+
+    requirements_file = tmp_path / "reqs.txt"
+    requirements_file.write_text("ops >= 1.2.0")
+
+    builder = CharmBuilder(
+        charmdir=tmp_path,
+        builddir=build_dir,
+        entrypoint=pathlib.Path("whatever"),
+        requirements=["reqs.txt"],
+    )
+
+    with patch("charmcraft.charm_builder.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 1
+        with patch("charmcraft.charm_builder._process_run") as mock:
+            builder.handle_dependencies()
+
+    expected = "Installing dependencies"
+    assert expected in [rec.message for rec in caplog.records]
+
+    digest_file = tmp_path / REQ_DIGEST_FILENAME
+    assert digest_file.is_file()
+    assert digest_file.read_text() == "72c3e56e5c761060596627e3ffa5cbf80284f983"
+
+    shutil.rmtree(build_dir)
+    build_dir.mkdir()
+    with patch("charmcraft.charm_builder.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 1
+        with patch("charmcraft.charm_builder._process_run") as mock:
+            builder.handle_dependencies()
+
+    assert mock.mock_calls == []
+
+    expected = "Skip installing dependencies, unchanged requirements"
+    assert expected in [rec.message for rec in caplog.records]
+
+
 def test_build_dependencies_needs_system(tmp_path, config):
     """pip3 is called with --system when pip3 needs it."""
     metadata = tmp_path / CHARM_METADATA
@@ -875,3 +919,21 @@ def test_processrun_crashed(caplog, tmp_path):
     with pytest.raises(CommandError) as cm:
         _process_run(cmd)
     assert str(cm.value) == f"Subprocess execution crashed for command {cmd}"
+
+
+def test_get_files_digest(tmp_path):
+    """File digest is correctly generated."""
+    file1 = tmp_path / "file1.txt"
+    file2 = tmp_path / "file2.txt"
+
+    file1.write_text("some content")
+    file2.write_text("more content")
+
+    digest = charm_builder._get_files_digest([file1, file2])
+    assert digest == "45a1d5c4bea7196e8749c0ccf8975150a1f32135"
+
+
+def test_get_files_digest_empty(tmp_path):
+    """Digest is correctly generated when no files are specified."""
+    digest = charm_builder._get_files_digest([])
+    assert digest == "da39a3ee5e6b4b0d3255bfef95601890afd80709"

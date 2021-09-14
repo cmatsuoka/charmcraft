@@ -18,6 +18,7 @@
 
 import argparse
 import errno
+import hashlib
 import logging
 import os
 import pathlib
@@ -33,6 +34,9 @@ from charmcraft.utils import make_executable
 # Some constants that are used through the code.
 WORK_DIRNAME = "work_dir"
 VENV_DIRNAME = "venv"
+
+# The digest file used to prevent virtualenv reinstalls if requirements didn't change
+REQ_DIGEST_FILENAME = ".requirements.sha1"
 
 # The file name and template for the dispatch script
 DISPATCH_FILENAME = "dispatch"
@@ -133,6 +137,7 @@ class CharmBuilder:
                 abs_path = abs_basedir / name
 
                 if name == VENV_DIRNAME:
+                    # the virtualenv dir is installed in handle_dependencies()
                     ignored.append(pos)
                 elif self.ignore_rules.match(str(rel_path), is_dir=True):
                     logger.debug("Ignoring directory because of rules: %r", str(rel_path))
@@ -153,6 +158,9 @@ class CharmBuilder:
                 rel_path = rel_basedir / name
                 abs_path = abs_basedir / name
 
+                if name == REQ_DIGEST_FILENAME:
+                    # don't install the requirements digest file
+                    continue
                 if self.ignore_rules.match(str(rel_path), is_dir=False):
                     logger.debug("Ignoring file because of rules: %r", str(rel_path))
                 elif abs_path.is_symlink():
@@ -220,27 +228,44 @@ class CharmBuilder:
 
     def handle_dependencies(self):
         """Handle from-directory and virtualenv dependencies."""
-        logger.debug("Installing dependencies")
-
-        # virtualenv with other dependencies (if any)
         if self.requirement_paths:
-            _process_run(["pip3", "--version"])
+            digest_file = self.charmdir / REQ_DIGEST_FILENAME
+            digest = _get_files_digest([self.charmdir / p for p in sorted(self.requirement_paths)])
+            logger.debug("Current requirements digest : %s", digest)
+
+            try:
+                prev_digest = digest_file.read_text()
+            except Exception:
+                prev_digest = None
+            logger.debug("Previous requirements digest: %s", prev_digest)
 
             venvpath = self.charmdir / VENV_DIRNAME
-            venvpath.mkdir(parents=True, exist_ok=True)
-            cmd = [
-                "pip3",
-                "install",  # base command
-                "--no-binary",
-                ":all:",  # do not use binary packages
-                "--target={}".format(venvpath),  # put all the resulting files in that specific dir
-            ]
-            if _pip_needs_system():
-                logger.debug("adding --system to work around pip3 defaulting to --user")
-                cmd.append("--system")
-            for reqspath in self.requirement_paths:
-                cmd.append("--requirement={}".format(reqspath))  # the dependencies file(s)
-            _process_run(cmd)
+
+            if digest != prev_digest:
+                # requirements have changed, reinstall virtualenv with other dependencies (if any)
+                logger.debug("Installing dependencies")
+                _process_run(["pip3", "--version"])
+
+                if venvpath.exists():
+                    shutil.rmtree(str(venvpath))
+                venvpath.mkdir(parents=True, exist_ok=True)
+                cmd = [
+                    "pip3",
+                    "install",  # base command
+                    "--no-binary",
+                    ":all:",  # do not use binary packages
+                    "--target={}".format(venvpath),  # put all the resulting files in this dir
+                ]
+                if _pip_needs_system():
+                    logger.debug("adding --system to work around pip3 defaulting to --user")
+                    cmd.append("--system")
+                for reqspath in self.requirement_paths:
+                    cmd.append("--requirement={}".format(reqspath))  # the dependencies file(s)
+                _process_run(cmd)
+
+                digest_file.write_text(digest)
+            else:
+                logger.debug("Skip installing dependencies, unchanged requirements")
 
             shutil.copytree(venvpath, self.buildpath / VENV_DIRNAME)
 
@@ -313,6 +338,20 @@ def _parse_arguments() -> argparse.Namespace:
     )
 
     return parser.parse_args()
+
+
+def _get_files_digest(path_list: List[pathlib.Path]) -> str:
+    """Compute the digest of the given files' contents."""
+    hasher = hashlib.sha1()
+    for path in path_list:
+        if not path.exists():
+            continue
+        with path.open("rb") as data_file:
+            block = data_file.read(512)
+            while block:
+                hasher.update(block)
+                block = data_file.read(512)
+    return hasher.hexdigest()
 
 
 def main():
