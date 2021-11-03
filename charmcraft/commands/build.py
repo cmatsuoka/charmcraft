@@ -131,8 +131,15 @@ class Builder:
         self.config = config
         self.metadata = parse_metadata_yaml(self.charmdir)
 
-        self._parts = self.config.parts.copy()
-        self._charm_part = self._parts.setdefault("charm", {})
+        if self.config.parts:
+            self._parts = self.config.parts.copy()
+        else:
+            self._parts = {"charm": {}}
+
+        self._charm_part = self._parts.get("charm")
+        if self._charm_part is None:
+            raise CommandError("Parts definition error: 'charm' part not defined.")
+
         self._prime = self._charm_part.setdefault("prime", [])
         self.provider = get_provider()
 

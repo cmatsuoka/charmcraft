@@ -265,6 +265,30 @@ def test_bundle_shell_after(tmp_path, bundle_yaml, bundle_config, mock_parts, mo
     assert mock_launch_shell.mock_calls == [mock.call()]
 
 
+# -- tests for implicit bundle part
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows not [yet] supported")
+def test_bundle_parts(tmp_path, bundle_yaml, bundle_config, mock_parts):
+    bundle_yaml(name="testbundle")
+    bundle_config.set(parts={"bundle": {"plugin": "bundle"}})
+    (tmp_path / "README.md").write_text("test readme")
+
+    PackCommand(bundle_config).run(get_namespace(shell_after=True))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows not [yet] supported")
+def test_bundle_parts_not_defined(tmp_path, bundle_yaml, bundle_config, mock_parts):
+    bundle_yaml(name="testbundle")
+    bundle_config.set(parts={"foo": {"plugin": "nil"}})
+    (tmp_path / "README.md").write_text("test readme")
+
+    with pytest.raises(CommandError) as cm:
+        PackCommand(bundle_config).run(get_namespace(shell_after=True))
+
+    assert str(cm.value) == "Parts definition error: 'bundle' part not defined."
+
+
 # -- tests for get paths helper
 
 

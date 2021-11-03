@@ -2008,6 +2008,24 @@ def test_show_linters_lint_errors_forced(basic_project, emitter, config):
     )
 
 
+# -- tests for implicit charm part
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows not [yet] supported")
+def test_bundle_parts(basic_project, config, mock_linters):
+    config.set(parts={"charm": {"plugin": "charm"}})
+    get_builder(config)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows not [yet] supported")
+def test_bundle_parts_not_defined(basic_project, config, mock_linters):
+    config.set(parts={"foo": {"plugin": "nil"}})
+
+    with pytest.raises(CommandError) as cm:
+        get_builder(config)
+    assert str(cm.value) == "Parts definition error: 'charm' part not defined."
+
+
 # --- tests for relativise helper
 
 

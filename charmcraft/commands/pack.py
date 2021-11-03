@@ -184,8 +184,16 @@ class PackCommand(BaseCommand):
             return []
 
         project = self.config.project
-        config_parts = self.config.parts.copy()
-        bundle_part = config_parts.setdefault("bundle", {})
+
+        if self.config.parts:
+            config_parts = self.config.parts.copy()
+        else:
+            config_parts = {"bundle": {}}
+
+        bundle_part = config_parts.get("bundle")
+        if bundle_part is None:
+            raise CommandError("Parts definition error: 'bundle' part not defined.")
+
         prime = bundle_part.setdefault("prime", [])
 
         # get the config files

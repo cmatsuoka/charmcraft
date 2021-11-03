@@ -304,7 +304,7 @@ class Config(ModelConfigDefaults, validate_all=False):
 
     type: Optional[str]
     charmhub: CharmhubConfig = CharmhubConfig()
-    parts: Dict[str, Any] = {}
+    parts: Optional[Dict[str, Any]]
     bases: List[BasesConfiguration] = [
         BasesConfiguration(
             **{
